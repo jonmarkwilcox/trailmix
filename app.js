@@ -123,7 +123,13 @@ function rescan() {
 const darkBg = () => P.darkBackground(brand);
 const lightBg = () => P.lightBackground(brand);
 
-const colorSub = (c) => `${c.cmyk ? `CMYK ${P.cmykText(c.cmyk)} <span class="exact">from file</span>` : `${c.space} ${c.values.map((v) => +(v * 100).toFixed(2)).join(', ')}`} · RGB ${E.hexToRgb(c.hex).map((v) => Math.round(v * 255)).join(' ')}`;
+const pct = (v) => +(v * 100).toFixed(2);
+const colorSub = (c) => {
+  const rgb = `RGB ${E.hexToRgb(c.hex).map((v) => Math.round(v * 255)).join(' ')}`;
+  if (c.cmykSource === 'file') return `CMYK ${P.cmykText(c.cmyk)} <span class="exact">from file</span> · ${rgb}`;
+  return `${rgb} <span class="exact">from file</span>${c.cmyk ? ` · CMYK ${P.cmykText(c.cmyk)} <span class="exact">entered</span>` : ''}`;
+};
+const needsCmyk = (c) => c.space !== 'CMYK' && c.space !== 'Gray';
 
 function renderColors() {
   $('#colors').innerHTML = brand.colors.map((c, i) => `
@@ -137,6 +143,8 @@ function renderColors() {
           <input type="text" value="${c.hex.toUpperCase()}" data-act="hex" aria-label="${esc(c.name)} HEX" class="in-hex" maxlength="7" spellcheck="false">
         </div>
         <div class="sub">${colorSub(c)}</div>
+        ${needsCmyk(c) ? `<input type="text" inputmode="decimal" value="${c.cmyk ? c.cmyk.map(pct).join(' ') : ''}" data-act="cmyk" placeholder="Official CMYK for print, e.g. 66 65 68 70" aria-label="${esc(c.name)} official CMYK" class="in-cmyk">
+        <div class="cmyk-warn" ${c.cmyk ? 'hidden' : ''}>No CMYK in the file. Print files use an automatic conversion until you enter the official values.</div>` : ''}
         <div class="art-warn" ${c.artHex && c.hex.toUpperCase() !== c.artHex.toUpperCase() ? '' : 'hidden'}>The artwork renders as <code>${c.artHex}</code>. <button type="button" class="link" data-act="use-art">Use artwork value</button></div>
         <div class="color-fields">
           <input type="text" value="${esc(c.note)}" data-act="note" placeholder="Usage note (optional)" aria-label="${esc(c.name)} usage note" class="in-name in-note">
@@ -161,6 +169,15 @@ $('#colors').addEventListener('input', (e) => {
   if (act === 'name') { c.name = e.target.value; c.named = true; clearTimeout(colorTimer); colorTimer = setTimeout(renderFamilies, 300); }
   if (act === 'pantone') c.pantone = e.target.value;
   if (act === 'note') c.note = e.target.value;
+  if (act === 'cmyk') {
+    const v = e.target.value.trim().split(/[\s,;/]+/).filter(Boolean).map(Number);
+    const ok = v.length === 4 && v.every((x) => Number.isFinite(x) && x >= 0 && x <= 100);
+    c.cmyk = ok ? v.map((x) => x / 100) : null;
+    c.cmykSource = ok ? 'entered' : null;
+    e.target.classList.toggle('invalid', !!e.target.value.trim() && !ok);
+    row.querySelector('.cmyk-warn').hidden = ok;
+    row.querySelector('.sub').innerHTML = colorSub(c);
+  }
   if (act === 'hex' && validHex(e.target.value)) { c.hex = normHex(e.target.value); row.querySelector('[data-act=picker]').value = c.hex.toLowerCase(); }
   if (act === 'picker') { c.hex = e.target.value.toUpperCase(); row.querySelector('[data-act=hex]').value = c.hex; }
   if (act === 'hex' || act === 'picker') {
@@ -267,6 +284,7 @@ function renderAssets() {
           <select data-act="role" aria-label="Role">${rOpts(a)}</select>
         </div>
         <span class="summary">${esc(P.TYPES.find((t) => t.id === a.type).label)} \u00b7 ${a.role === 'primary' ? 'Primary' : 'Secondary'}</span>
+        ${(a.logo.warnings || []).map((w) => `<span class="asset-warn">${esc(w)}</span>`).join('')}
         <small>${esc(a.fileName)}</small>
         <button type="button" class="edit-btn" data-act="edit" aria-expanded="${openCards.has(a.id)}">${openCards.has(a.id) ? 'Done' : 'Edit'}</button>
       </figcaption>

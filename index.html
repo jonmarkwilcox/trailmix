@@ -38,11 +38,11 @@
   <main class="wrap">
     <section id="intro" class="drop-hero">
       <label id="dropzone" class="dropzone" tabindex="0">
-        <input id="file-input" type="file" accept=".eps,.ai,.pdf,.ps,application/postscript,application/pdf" multiple hidden>
+        <input id="file-input" type="file" accept=".eps,.ai,.pdf,.ps,.svg,application/postscript,application/pdf,image/svg+xml" multiple hidden>
         <svg class="drop-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M24 31V11m0 0-8 8m8-8 8 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 29v6a4 4 0 0 0 4 4h22a4 4 0 0 0 4-4v-6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
         <strong class="for-desktop">Drop all your logo files here</strong>
         <strong class="for-touch">Choose your logo files</strong>
-        <span>EPS, AI or PDF. Include every version: dark and light, with and without tagline, the mark.</span>
+        <span>EPS, AI, PDF or SVG. Include every version: dark and light, with and without tagline, the mark.</span>
         <span class="btn btn-secondary for-desktop">Choose files</span>
         <span class="btn btn-primary for-touch">Browse files</span>
       </label>
@@ -69,7 +69,7 @@
 
         <div class="card">
           <h2>Brand colors</h2>
-          <p class="hint">Found in your artwork. CMYK is read exactly from the files and HEX is how the artwork renders on screen. The artwork is the reference: change a value only if you're sure.</p>
+          <p class="hint">Found in your artwork. CMYK is read exactly from EPS/AI/PDF files and HEX is how the artwork renders on screen. SVG files only contain screen colors, so add their official CMYK for print. The artwork is the reference: change a value only if you're sure.</p>
           <div id="colors" class="colors"></div>
           <button id="suggest-pantone" class="btn btn-ghost btn-sm" type="button">Suggest closest Pantone</button>
           <label class="check jpg-white"><input type="checkbox" id="jpg-white" checked> JPGs of dark logos on plain white</label>

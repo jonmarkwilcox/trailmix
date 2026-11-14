@@ -74,7 +74,8 @@ export function collectColors(assets, previous = []) {
         const old = prev.get(key);
         e = {
           key, space, values,
-          cmyk: space === 'CMYK' ? values : space === 'Gray' ? [0, 0, 0, +(1 - values[0]).toFixed(6)] : null,
+          cmyk: space === 'CMYK' ? values : space === 'Gray' ? [0, 0, 0, +(1 - values[0]).toFixed(6)] : (old?.cmyk || null),
+          cmykSource: space === 'CMYK' || space === 'Gray' ? 'file' : (old?.cmyk ? old.cmykSource : null),
           sourceRgb: space === 'RGB' ? values : null,
           artHex: c.hex, // how the artwork itself renders (colour-managed CMYK -> sRGB)
           hex: old?.hex || c.hex, name: old?.name || '', pantone: old?.pantone || '', note: old?.note || '', named: !!old?.named,
@@ -503,6 +504,45 @@ export function packageOutline(brand) {
   return rows;
 }
 
+const isCmykAsset = (a) => a.colorKeys.every((k) => k.startsWith('CMYK:') || k.startsWith('Gray:'));
+
+/** An uploaded SVG is shipped as is when none of its colours were changed. */
+function originalSvgUsable(brand, a) {
+  if (a.logo.kind !== 'svg' || !a.logo.svgText) return false;
+  const byKey = new Map(brand.colors.map((c) => [c.key, c]));
+  return a.colorKeys.every((k) => { const c = byKey.get(k); return c && c.hex.toUpperCase() === c.artHex.toUpperCase(); });
+}
+
+/** Colours of an asset that will be converted automatically for print (no official CMYK). */
+export function unspecifiedPrintColors(brand, a) {
+  return brand.colors.filter((c) => a.colorKeys.includes(c.key) && !c.cmyk);
+}
+
+/**
+ * Print (CMYK) PDF. CMYK artwork is used as is. RGB colours take the official
+ * CMYK entered for them; any colour without one is converted by Ghostscript.
+ */
+export async function printPdf(brand, a) {
+  if (isCmykAsset(a)) return a.logo.pdf;
+  const byKey = new Map(brand.colors.map((c) => [c.key, c]));
+  const official = new Map();
+  for (const k of a.colorKeys) { const c = byKey.get(k); if (c?.cmyk && c.space !== 'CMYK') official.set(k, c.cmyk); }
+  let pdf = E.recolorPdf(a.logo.pdf, (space, values) => {
+    const key = space + ':' + values.map((v) => +v.toFixed(6)).join(',');
+    for (const [k, cmyk] of official) {
+      const c = byKey.get(k);
+      if (c.space === space && c.values.every((v, i) => Math.abs(v - values[i]) < 0.0005)) return { space: 'CMYK', values: cmyk };
+    }
+    void key;
+    return null;
+  });
+  if (unspecifiedPrintColors(brand, a).length) {
+    pdf = await E.toCmykPdf(pdf);
+    pdf = E.snapColors(pdf, [...official.values()].map((v) => ({ space: 'CMYK', values: v })));
+  }
+  return pdf;
+}
+
 /**
  * Build every file. `out(path, bytes|string)` receives each one.
  * opts.webp(pngBytes) -> Promise<bytes>, opts.progress(text, fraction), opts.guide() -> Promise<bytes>
@@ -526,14 +566,14 @@ export async function buildPackage(brand, out, opts = {}) {
     await tick();
     const dir = L.assetDir(a);
     const print = `${dir}/01_Print_CMYK`, digital = `${dir}/02_Digital_RGB`;
-    const allCmyk = a.colorKeys.every((k) => k.startsWith('CMYK:') || k.startsWith('Gray:'));
-    const mode = allCmyk ? 'cmyk' : 'print';
-    // EPS: the designer's original file, untouched.
-    out(`${print}/01_EPS/${a.base}-${mode}.eps`, a.logo.kind === 'eps' ? a.bytes : await E.toEps(a.logo.pdf));
-    out(`${print}/02_PDF/${a.base}-${mode}.pdf`, a.logo.pdf);
+    const pdfPrint = await printPdf(brand, a);
+    const cmykSources = brand.colors.filter((c) => c.cmyk && a.colorKeys.includes(c.key)).map((c) => ({ space: 'CMYK', values: c.cmyk }));
+    // EPS: the designer's original file, untouched, when it is already CMYK.
+    out(`${print}/01_EPS/${a.base}-cmyk.eps`, a.logo.kind === 'eps' && isCmykAsset(a) ? a.bytes : await E.toEpsExact(pdfPrint, cmykSources));
+    out(`${print}/02_PDF/${a.base}-cmyk.pdf`, pdfPrint);
 
     const rgb = rgbPdf(brand, a);
-    out(`${digital}/01_SVG/${a.base}-rgb.svg`, E.toSvg(rgb));
+    out(`${digital}/01_SVG/${a.base}-rgb.svg`, originalSvgUsable(brand, a) ? a.logo.svgText : E.toSvg(rgb));
     for (const s of PNG_SIZES) {
       const png = E.render(rgb, { width: longestTo(a.logo, s.px) });
       out(`${digital}/02_PNG/${s.folder}/${a.base}-rgb-${s.px}px.png`, png);

@@ -90,10 +90,11 @@ function latin1(bytes) {
 
 function sniff(bytes) {
   if (bytes[0] === 0xc5 && bytes[1] === 0xd0 && bytes[2] === 0xd3 && bytes[3] === 0xc6) return 'eps';
-  const head = latin1(bytes.subarray(0, 2048));
+  const head = latin1(bytes.subarray(0, 8192));
   if (head.startsWith('%!')) return /EPSF/.test(head.split(/[\r\n]/)[0]) ? 'eps' : 'ps';
   if (head.includes('%PDF-')) return 'pdf';
   if (/<svg[\s>]/i.test(head)) return 'svg';
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) return 'svgz';
   return null;
 }
 
@@ -115,18 +116,27 @@ function postscriptText(bytes) {
  */
 export async function loadLogo(bytes) {
   const kind = sniff(bytes);
-  if (kind === 'svg') throw new Error('SVG input is not supported yet. Please upload the EPS, AI or PDF.');
-  if (!kind) throw new Error('This does not look like an EPS, AI or PDF file.');
-  const inName = 'in.' + (kind === 'pdf' ? 'pdf' : 'eps');
+  if (kind === 'svgz') throw new Error('Compressed SVG (.svgz) is not supported. Please save a plain .svg.');
+  if (!kind) throw new Error('This does not look like an EPS, AI, PDF or SVG file.');
+  const warnings = [];
+  let input = bytes, inName = 'in.' + (kind === 'eps' || kind === 'ps' ? 'eps' : 'pdf');
+  let svgText = null, svgColors = [];
+  if (kind === 'svg') {
+    svgText = new TextDecoder('utf-8').decode(bytes);
+    const r = await svgToPdf(svgText);
+    input = r.pdf;
+    warnings.push(...r.warnings);
+    svgColors = r.colors;
+  }
 
   const normalized = await ghostscript(
     ['-sDEVICE=pdfwrite', '-dNoOutputFonts', '-dCompatibilityLevel=1.6', '-dAutoRotatePages=/None',
       '-dEPSCrop', '-dFirstPage=1', '-dLastPage=1', '-o', '/out.pdf', '/' + inName],
-    { [inName]: bytes }, 'out.pdf');
+    { [inName]: input }, 'out.pdf');
 
   let pdf, width, height;
-  if (kind === 'eps') {
-    // Keep the designer's own bounding box (Ghostscript crops the page to it).
+  if (kind === 'eps' || kind === 'svg') {
+    // Keep the designer's own bounds: the EPS bounding box or the SVG viewBox.
     const doc = new mupdf.PDFDocument(normalized);
     const mb = doc.loadPage(0).getObject().getInheritable('MediaBox');
     const b = [0, 1, 2, 3].map((i) => mb.get(i).asNumber());
@@ -142,9 +152,96 @@ export async function loadLogo(bytes) {
     pdf = setPdfBox(normalized, [base[0] + bx0, base[1] + by0, base[0] + bx1, base[1] + by1]);
     width = bx1 - bx0; height = by1 - by0;
   }
-  const sourceColors = kind === 'pdf' ? pdfSourceColors(bytes) : psSourceColors(postscriptText(bytes));
-  pdf = snapColors(pdf, sourceColors);
-  return { pdf, width, height, kind, sourceColors };
+  let sourceColors;
+  if (kind === 'svg') {
+    // SVG colours are exact 8-bit values; the PDF route rounds them to 2 decimals, so snap back to the SVG's own.
+    sourceColors = svgColors;
+    pdf = snapColors(pdf, sourceColors, 0.0075);
+  } else {
+    sourceColors = kind === 'pdf' ? pdfSourceColors(bytes) : psSourceColors(postscriptText(bytes));
+    pdf = snapColors(pdf, sourceColors);
+  }
+  return { pdf, width, height, kind, sourceColors, svgText, warnings };
+}
+
+/* ------------------------------------------------------------------ */
+/* SVG input: converted to a vector PDF with jsPDF + svg2pdf.js         */
+/* ------------------------------------------------------------------ */
+
+function loadScript(rel) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = new URL(rel, import.meta.url).href;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Could not load ' + rel));
+    document.head.appendChild(s);
+  });
+}
+let svgLibs;
+function loadSvgLibs() {
+  if (!svgLibs) {
+    svgLibs = (async () => {
+      if (!globalThis.jspdf) await loadScript('./vendor/jspdf/jspdf.umd.min.js');
+      if (!globalThis.svg2pdf) await loadScript('./vendor/svg2pdf/svg2pdf.umd.min.js');
+      return { jsPDF: globalThis.jspdf.jsPDF, svg2pdf: globalThis.svg2pdf.svg2pdf };
+    })();
+    svgLibs.catch(() => { svgLibs = undefined; });
+  }
+  return svgLibs;
+}
+
+const CSS_UNITS = { px: 0.75, pt: 1, pc: 12, in: 72, mm: 72 / 25.4, cm: 72 / 2.54, '': 0.75 };
+function svgLength(v) {
+  const m = String(v || '').trim().match(/^([\d.]+)\s*(px|pt|pc|in|mm|cm)?$/);
+  return m ? parseFloat(m[1]) * CSS_UNITS[m[2] || ''] : null;
+}
+
+/** Convert SVG markup to a vector PDF page the size of its viewBox (1 user unit = 1 pt). */
+async function svgToPdf(text) {
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const svg = doc.documentElement;
+  if (!svg || svg.nodeName.toLowerCase() !== 'svg' || doc.querySelector('parsererror')) throw new Error('This SVG could not be read.');
+  const warnings = [];
+  if (svg.querySelector('text')) warnings.push('Contains live text. Convert text to outlines before exporting the SVG, or the font will not match.');
+  if (svg.querySelector('image')) warnings.push('Contains an embedded bitmap image.');
+  let vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  let w, h;
+  if (vb.length === 4 && vb.every(Number.isFinite) && vb[2] > 0 && vb[3] > 0) { w = vb[2]; h = vb[3]; }
+  else {
+    const pw = svgLength(svg.getAttribute('width')), ph = svgLength(svg.getAttribute('height'));
+    if (!pw || !ph) throw new Error('This SVG has no viewBox or size, so its bounds are unknown. Export it with a viewBox.');
+    w = pw / 0.75; h = ph / 0.75;
+    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  }
+  svg.setAttribute('width', w);
+  svg.setAttribute('height', h);
+  const { jsPDF, svg2pdf } = await loadSvgLibs();
+  // svg2pdf reads computed geometry, so the SVG lives briefly in the page, out of sight.
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:-100000px;top:0;width:0;height:0;overflow:hidden;visibility:hidden';
+  const node = document.importNode(svg, true);
+  host.appendChild(node);
+  document.body.appendChild(host);
+  try {
+    // The exact colours, as the browser resolves them (classes, styles, attributes).
+    const colors = new Map();
+    const addColor = (v) => {
+      const m = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/.exec(v || '');
+      if (!m) return;
+      const values = [m[1], m[2], m[3]].map((n) => +n / 255);
+      colors.set(values.join(','), { space: 'RGB', values });
+      if (m[1] === m[2] && m[2] === m[3]) colors.set('g' + m[1], { space: 'Gray', values: [+m[1] / 255] });
+    };
+    for (const el of [node, ...node.querySelectorAll('*')]) {
+      const cs = getComputedStyle(el);
+      addColor(cs.fill); addColor(cs.stroke); addColor(cs.stopColor);
+    }
+    const pdf = new jsPDF({ unit: 'pt', format: [w, h], orientation: w > h ? 'landscape' : 'portrait', compress: true });
+    await svg2pdf(node, pdf, { x: 0, y: 0, width: w, height: h });
+    return { pdf: new Uint8Array(pdf.output('arraybuffer')), warnings, colors: [...colors.values()] };
+  } finally {
+    host.remove();
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -320,6 +417,9 @@ const matScale = (m) => Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]));
 const colorCache = new Map();
 /** Exact screen RGB of any color (incl. spot colors) by letting MuPDF draw it. */
 function colorToRGB(cs, color) {
+  // Screen colours are exact already; only print colours need colour management.
+  if (cs.isRGB()) return color.slice(0, 3).map((v) => Math.round(v * 255) / 255);
+  if (cs.isGray()) return [color[0], color[0], color[0]].map((v) => Math.round(v * 255) / 255);
   const key = cs.getName() + ':' + color.join(',');
   if (colorCache.has(key)) return colorCache.get(key);
   const pix = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, 1, 1], false);
@@ -846,6 +946,34 @@ export const toGrayPdf = (pdf) => ghostscript(
   { 'i.pdf': pdf }, 'o.pdf');
 
 export const toEps = (pdf) => ghostscript(['-sDEVICE=eps2write', '-o', '/o.eps', '/i.pdf'], { 'i.pdf': pdf }, 'o.eps');
+
+/**
+ * EPS with exact colours: Ghostscript rounds colours to a 1/1024 grid, and its
+ * colour operators are plain text, so the exact source values are written back.
+ * sources: [{space:'CMYK'|'RGB'|'Gray', values}]
+ */
+export async function toEpsExact(pdf, sources, tolerance = 0.0025) {
+  const eps = await toEps(pdf);
+  if (!sources?.length) return eps;
+  const N = '-?(?:\\d+\\.?\\d*|\\.\\d+)';
+  const pattern = (n, op) => new RegExp(`(?<![\\w.\\-])((?:${N} ){${n - 1}}${N}) (${op})(?=[\\s\\]})])`, 'g');
+  const snap = (spaceName) => (m, nums, op) => {
+    const v = nums.split(' ').map(Number);
+    let best = null, err = Infinity;
+    for (const s of sources) {
+      if (s.space !== spaceName || s.values.length !== v.length) continue;
+      const e = Math.max(...s.values.map((x, i) => Math.abs(x - v[i])));
+      if (e < err) { err = e; best = s; }
+    }
+    if (!best || err > tolerance || err === 0) return m;
+    return best.values.map(colorNum).join(' ') + ' ' + op;
+  };
+  const txt = latin1(eps)
+    .replace(pattern(4, 'k|K'), snap('CMYK'))
+    .replace(pattern(3, 'rg|RG'), snap('RGB'))
+    .replace(pattern(1, 'g|G'), snap('Gray'));
+  return Uint8Array.from(txt, (c) => c.charCodeAt(0));
+}
 
 export function toSvg(pdf) {
   const doc = mupdf.Document.openDocument(pdf, 'application/pdf');
