@@ -893,14 +893,66 @@ export function render(pdf, { width, box, inset = 0.12, background = null, forma
     ph = Math.max(1, Math.round(h * s));
     matrix = mupdf.Matrix.scale(s, s);
   }
-  const alpha = format === 'png' && !background;
+  const alpha = (format === 'png' || format === 'rgba') && !background;
   const pix = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, pw, ph], alpha);
   if (alpha) pix.clear(); else pix.clear(255);
   if (background) fillBackground(pix, background);
   const dev = new mupdf.DrawDevice(matrix, pix);
   page.run(dev, mupdf.Matrix.identity);
   dev.close();
+  if (format === 'rgba') return pixmapToRGBA(pix);
   return format === 'jpg' ? pix.asJPEG(quality, false).slice() : pix.asPNG().slice();
+}
+
+/** Straight (un-premultiplied) RGBA pixels from a MuPDF pixmap. */
+function pixmapToRGBA(pix) {
+  const w = pix.getWidth(), h = pix.getHeight();
+  const stride = pix.getStride();
+  const n = Math.round(stride / w); // bytes per pixel: 4 with alpha, 3 without
+  const src = pix.getPixels();
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * stride + x * n, o = (y * w + x) * 4;
+      const a = n === 4 ? src[i + 3] : 255;
+      if (a === 255) { out[o] = src[i]; out[o + 1] = src[i + 1]; out[o + 2] = src[i + 2]; }
+      else if (a > 0) { out[o] = Math.round((src[i] * 255) / a); out[o + 1] = Math.round((src[i + 1] * 255) / a); out[o + 2] = Math.round((src[i + 2] * 255) / a); }
+      out[o + 3] = a;
+    }
+  }
+  return { data: out, width: w, height: h };
+}
+
+/* ------------------------------------------------------------------ */
+/* WebP (lossless, libwebp in WebAssembly: same output in every browser) */
+/* ------------------------------------------------------------------ */
+
+const WEBP_OPTIONS = {
+  quality: 100, target_size: 0, target_PSNR: 0, method: 4, sns_strength: 50, filter_strength: 60, filter_sharpness: 0,
+  filter_type: 1, partitions: 0, segments: 4, pass: 1, show_compressed: 0, preprocessing: 0, autofilter: 0,
+  partition_limit: 0, alpha_compression: 1, alpha_filtering: 1, alpha_quality: 100, lossless: 1, exact: 0,
+  image_hint: 0, emulate_jpeg_size: 0, thread_level: 0, low_memory: 0, near_lossless: 100, use_delta_palette: 0, use_sharp_yuv: 0,
+};
+let webpModule;
+function webpEncoder() {
+  if (!webpModule) {
+    webpModule = (async () => {
+      const simd = WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
+      const { default: factory } = await import(simd ? './vendor/webp/webp_enc_simd.js' : './vendor/webp/webp_enc.js');
+      return factory({ noInitialRun: true });
+    })();
+    webpModule.catch(() => { webpModule = undefined; });
+  }
+  return webpModule;
+}
+
+/** Render a PDF straight to lossless WebP (same options as render()). */
+export async function renderWebp(pdf, opts) {
+  const { data, width, height } = render(pdf, { ...opts, format: 'rgba' });
+  const enc = await webpEncoder();
+  const result = enc.encode(data, width, height, WEBP_OPTIONS);
+  if (!result) throw new Error('WebP encoding failed');
+  return new Uint8Array(result).slice();
 }
 
 /* ------------------------------------------------------------------ */

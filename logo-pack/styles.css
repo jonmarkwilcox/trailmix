@@ -260,3 +260,86 @@ label.color-sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer
 .bg-role select { font: inherit; font-size: 13px; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 3px 6px; }
 #suggest-pantone { margin-top: 10px; }
 .jpg-white { margin-top: 10px; font-size: 14px; }
+
+/* ---- Phone layout ---- */
+.tabs, .for-touch, .guide-empty, .edit-btn, .asset .summary { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .for-desktop { display: none !important; }
+  .for-touch { display: inline-flex; }
+  strong.for-touch { display: block; }
+}
+@media (max-width: 700px) {
+  body { padding-bottom: 150px; }
+  .top-inner { flex-wrap: nowrap; gap: 10px; padding-top: 10px; padding-bottom: 10px; }
+  .top-inner > div { min-width: 0; }
+  h1 { font-size: 18px; }
+  .tag { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pill { margin-left: auto; font-size: 11px; padding: 3px 8px; }
+  .brandmark { width: 32px; height: 32px; }
+  .drop-hero { padding-top: 20px; }
+  .dropzone { padding: 32px 16px; }
+  .how { margin-top: 18px; }
+
+  .workspace { display: block; padding-top: 0; }
+  .tabs {
+    display: flex; gap: 4px; position: sticky; top: 0; z-index: 6;
+    margin: 0 -16px 14px; padding: 10px 16px; background: var(--bg); border-bottom: 1px solid var(--line);
+  }
+  .tabs button {
+    flex: 1; font: inherit; font-weight: 600; font-size: 15px; min-height: 44px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--muted); position: relative;
+  }
+  .tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .dot { position: absolute; top: 8px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; }
+  .workspace[data-tab="logos"] .settings,
+  .workspace[data-tab="logos"] #guide-section,
+  .workspace[data-tab="logos"] #guide-empty,
+  .workspace[data-tab="brand"] .previews,
+  .workspace[data-tab="guide"] .settings,
+  .workspace[data-tab="guide"] .previews > .preview-head:first-child,
+  .workspace[data-tab="guide"] #assets { display: none !important; }
+  .workspace[data-tab="guide"] #guide-empty { display: block; }
+  .workspace[data-tab="guide"] #guide-section:not([hidden]) ~ #guide-empty,
+  .workspace[data-tab="guide"].has-guide #guide-empty { display: none; }
+  .guide-section { margin-top: 0; }
+  .guide-pages { grid-template-columns: 1fr; gap: 12px; }
+
+  /* Logo cards: two per row, edit controls behind a button */
+  .asset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .asset .stage { height: 104px; padding: 12px; }
+  .asset .stage img { max-height: 80px; }
+  .asset figcaption { padding: 8px 10px 10px; gap: 6px; }
+  .asset .fname { font-size: 11px; line-height: 1.35; }
+  .asset small { display: none; }
+  .asset .summary { display: block; font-size: 12px; color: var(--muted); }
+  .asset .selects { display: none; flex-direction: column; }
+  .asset.open { grid-column: 1 / -1; }
+  .asset.open .stage { height: 150px; }
+  .asset.open .stage img { max-height: 120px; }
+  .asset.open .selects { display: flex; }
+  .asset.open small { display: block; }
+  .edit-btn { display: block; font: inherit; font-size: 14px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border: 0; border-radius: 8px; min-height: 40px; }
+
+  /* Finger-sized controls; 16px text stops iOS from zooming in on focus */
+  input[type="text"], input[type="number"], select, .selects select, .bg-role select, .color-fields input, .family-row input[type="text"] { font-size: 16px !important; min-height: 44px; }
+  .selects select { width: 100%; }
+  .color-row { grid-template-columns: 44px 1fr 40px; }
+  .color-fields { flex-wrap: wrap; }
+  .color-fields input.in-hex { flex: 1 1 110px; }
+  .move-up { min-width: 40px; min-height: 40px; font-size: 18px; }
+  .bg-role { margin-top: 8px; }
+  .bg-role select { flex: 1; }
+  .btn-sm, .btn-ghost { min-height: 44px; }
+  .radio { min-height: 44px; }
+
+  /* Compact bottom bar */
+  .bar-inner { flex-wrap: wrap; gap: 8px; padding-top: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .bar-text { flex-basis: 100%; gap: 0; }
+  .bar-text strong { font-size: 14px; }
+  .bar-inner .btn { flex: 1; justify-content: center; min-height: 48px; font-size: 15px; }
+  .foot { padding-bottom: 160px; }
+}
+@media (max-width: 700px) {
+  .color-fields input.in-name { flex: 1 1 100%; }
+  .color-fields input.in-hex { flex: 1 1 100%; }
+}

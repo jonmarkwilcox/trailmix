@@ -257,7 +257,7 @@ function renderAssets() {
   const tOpts = (a) => P.TYPES.map((t) => `<option value="${t.id}" ${a.type === t.id ? 'selected' : ''}>${t.label}</option>`).join('');
   const rOpts = (a) => P.ROLES.map((r) => `<option value="${r.id}" ${a.role === r.id ? 'selected' : ''}>${r.label} (${r.id === 'primary' ? 'dark' : 'light'})</option>`).join('');
   const tile = (a) => `
-    <figure class="asset" data-id="${a.id}">
+    <figure class="asset${openCards.has(a.id) ? ' open' : ''}" data-id="${a.id}">
       <div class="stage" style="background:${a.role === 'primary' ? light : dark}"><img src="${thumbFor(a)}" alt="${esc(a.fileName)}"></div>
       <figcaption>
         <code class="fname" title="File name">${esc(a.base)}</code>
@@ -266,7 +266,9 @@ function renderAssets() {
           <select data-act="type" aria-label="Version">${tOpts(a)}</select>
           <select data-act="role" aria-label="Role">${rOpts(a)}</select>
         </div>
+        <span class="summary">${esc(P.TYPES.find((t) => t.id === a.type).label)} \u00b7 ${a.role === 'primary' ? 'Primary' : 'Secondary'}</span>
         <small>${esc(a.fileName)}</small>
+        <button type="button" class="edit-btn" data-act="edit" aria-expanded="${openCards.has(a.id)}">${openCards.has(a.id) ? 'Done' : 'Edit'}</button>
       </figcaption>
     </figure>`;
   const loading = pending.map((p) => `<figure class="asset loading"><div class="stage checker"><div class="spinner"></div></div><figcaption><small>${esc(p.fileName)}</small></figcaption></figure>`).join('');
@@ -292,6 +294,16 @@ function renderAssetNames() {
   for (const h of document.querySelectorAll('.logo-block h3')) void h;
 }
 
+const openCards = new Set();
+$('#assets').addEventListener('click', (e) => {
+  if (e.target.dataset.act !== 'edit') return;
+  const el = e.target.closest('.asset');
+  const id = +el.dataset.id;
+  if (openCards.has(id)) openCards.delete(id); else openCards.add(id);
+  renderAssets();
+  document.querySelector(`.asset[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+});
+
 $('#assets').addEventListener('change', (e) => {
   const el = e.target.closest('.asset');
   if (!el) return;
@@ -308,6 +320,33 @@ function renderAll() {
   renderColors();
   renderFamilies();
   renderAssets();
+  updateBrandDot();
+}
+
+/* Phone tabs ---------------------------------------------------------- */
+function showTab(tab) {
+  $('#workspace').dataset.tab = tab;
+  for (const b of document.querySelectorAll('.tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === tab));
+  if (matchMedia('(max-width: 700px)').matches) window.scrollTo({ top: 0 });
+}
+document.querySelector('.tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-tab]');
+  if (b) showTab(b.dataset.tab);
+});
+/** A dot on the Brand tab while the company or a sub-brand still needs a name. */
+function updateBrandDot() {
+  const missing = !brand.name.trim() || brand.families.some((f) => !f.isMain && !f.touched);
+  $('#brand-dot').hidden = !missing || !brand.assets.length;
+}
+$('#brand').addEventListener('input', () => {
+  updateBrandDot();
+  if (brand.name.trim() && /company name/.test($('#progress-text').textContent)) setProgress('Check the names and colors, then download.', 0);
+});
+$('#families').addEventListener('input', updateBrandDot);
+
+// iPhone/iPad file pickers can grey out .eps when an accept filter is set; files are checked after picking anyway.
+if (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
+  $('#file-input').removeAttribute('accept');
 }
 
 /* ------------------------------------------------------------------ */
@@ -331,11 +370,12 @@ function updateCount() {
 }
 
 function checkReady() {
-  if (!brand.name.trim()) { setProgress('Enter the company name first.', 0); $('#brand').focus(); return false; }
+  if (!brand.name.trim()) { setProgress('Enter the company name first.', 0); showTab('brand'); $('#brand').focus(); return false; }
   return true;
 }
 
 let lastGuide = null;
+$('#guide-build').addEventListener('click', () => $('#preview-guide').click());
 $('#preview-guide').addEventListener('click', async () => {
   if (busy || !checkReady()) return;
   busy = true; updateCount();
@@ -353,6 +393,8 @@ $('#preview-guide').addEventListener('click', async () => {
     }
     $('#guide-pages').innerHTML = urls.map((u, i) => `<a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="Guide page ${i + 1}" loading="lazy"></a>`).join('');
     $('#guide-section').hidden = false;
+    $('#workspace').classList.add('has-guide');
+    if (matchMedia('(max-width: 700px)').matches) showTab('guide');
     $('#guide-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
     setProgress(`Guidelines ready: ${n} pages.`, 1);
   } catch (e) {
@@ -375,15 +417,6 @@ function save(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
 }
 
-async function webp(png) {
-  try {
-    const bmp = await createImageBitmap(new Blob([png], { type: 'image/png' }));
-    const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(bmp.width, bmp.height) : Object.assign(document.createElement('canvas'), { width: bmp.width, height: bmp.height });
-    c.getContext('2d').drawImage(bmp, 0, 0);
-    const blob = c.convertToBlob ? await c.convertToBlob({ type: 'image/webp', quality: 1 }) : await new Promise((r) => c.toBlob(r, 'image/webp', 1));
-    return blob && blob.type === 'image/webp' ? new Uint8Array(await blob.arrayBuffer()) : null;
-  } catch { return null; }
-}
 
 $('#download').addEventListener('click', async () => {
   if (busy || !checkReady()) return;
@@ -393,7 +426,6 @@ $('#download').addEventListener('click', async () => {
     const zip = new JSZip();
     let count = 0;
     const L = await P.buildPackage(brand, (path, data) => { if (data) { zip.file(path, data); count++; } }, {
-      webp,
       progress: (t, f) => setProgress(`Creating ${t}…`, f * 0.85),
       guide: async () => (lastGuide = buildGuide(brand)),
     });
@@ -409,3 +441,8 @@ $('#download').addEventListener('click', async () => {
 });
 
 updateCount();
+
+// Installable app: cache the converters so repeat visits (and offline use) are fast.
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}

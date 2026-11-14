@@ -537,7 +537,7 @@ export async function buildPackage(brand, out, opts = {}) {
     for (const s of PNG_SIZES) {
       const png = E.render(rgb, { width: longestTo(a.logo, s.px) });
       out(`${digital}/02_PNG/${s.folder}/${a.base}-rgb-${s.px}px.png`, png);
-      if (opts.webp) out(`${digital}/04_WEBP/${s.folder}/${a.base}-rgb-${s.px}px.webp`, await opts.webp(png));
+      if (opts.webp !== false) out(`${digital}/04_WEBP/${s.folder}/${a.base}-rgb-${s.px}px.webp`, await E.renderWebp(rgb, { width: longestTo(a.logo, s.px) }));
       await tick();
     }
     for (const bg of jpgBackgroundsFor(brand, a)) {

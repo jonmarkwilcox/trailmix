@@ -86,6 +86,10 @@ python3 -m http.server 8000      # open http://localhost:8000
 
 To host it, push the folder to any static host: GitHub Pages, Netlify, Cloudflare Pages, or S3. Libraries are bundled in `vendor/`, so it needs no CDN and also works offline. The first visit downloads about 26 MB of converters, which the browser then caches.
 
+## Phones and tablets
+
+On phones the app splits into three tabs: **Logos** (cards two per row; tap *Edit* to change a file's family, version or role), **Brand** (company, colors, families; a dot marks anything still to fill in) and **Guide** (page-by-page preview). Controls are finger-sized and inputs use 16 px text so iOS doesn't zoom. It can be added to the home screen (web app manifest + icons). A service worker caches the converters, so after the first visit it opens instantly and works offline. WebP files are encoded by libwebp (WebAssembly), so Safari produces the same lossless WebP as Chrome.
+
 ## Code
 
 | File | Role |
