@@ -58,38 +58,72 @@ function autoColorName(rgb) {
 /* Scan: colours, roles, types, families                                */
 /* ------------------------------------------------------------------ */
 
-/** Merge every asset's palette into one brand colour list (exact values). */
-export function collectColors(assets, previous = []) {
-  const prev = new Map(previous.map((c) => [c.key, c]));
-  const map = new Map();
+/**
+ * Merge every asset's palette into brand colours. Colours that look the same
+ * (CIEDE2000 under 5, e.g. an SVG export that drifted from the EPS) are grouped
+ * under one brand colour; a CMYK colour from an EPS/AI/PDF leads its group so
+ * its exact CMYK is the print value for the whole group.
+ * previous: the last result (keeps names, HEX, notes, CMYK…); splits: member keys kept apart.
+ */
+export function collectColors(assets, previous = [], splits = new Set()) {
+  // 1. Every distinct colour in the files.
+  const raw = new Map();
   for (const a of assets) {
-    a.colorKeys = [];
+    a.rawKeys = [];
     for (const c of a.analysis.palette) {
       const space = c.space === 'CMYK' || c.space === 'RGB' || c.space === 'Gray' ? c.space : null;
       if (!space) continue;
       const values = c.values.map((v) => +v.toFixed(6));
       const key = space + ':' + values.join(',');
-      let e = map.get(key);
-      if (!e) {
-        const old = prev.get(key);
-        e = {
-          key, space, values,
-          cmyk: space === 'CMYK' ? values : space === 'Gray' ? [0, 0, 0, +(1 - values[0]).toFixed(6)] : (old?.cmyk || null),
-          cmykSource: space === 'CMYK' || space === 'Gray' ? 'file' : (old?.cmyk ? old.cmykSource : null),
-          sourceRgb: space === 'RGB' ? values : null,
-          artHex: c.hex, // how the artwork itself renders (colour-managed CMYK -> sRGB)
-          hex: old?.hex || c.hex, name: old?.name || '', pantone: old?.pantone || '', note: old?.note || '', named: !!old?.named,
-          bg: old ? old.bg : undefined,
-          area: 0,
-        };
-        map.set(key, e);
-      }
-      e.area += c.area;
-      a.colorKeys.push(key);
+      let r = raw.get(key);
+      if (!r) { r = { key, space, values, artHex: c.hex.toUpperCase(), area: 0, files: new Set() }; raw.set(key, r); }
+      r.area += c.area;
+      r.files.add(a.id);
+      a.rawKeys.push(key);
     }
+  }
+  // 2. Group look-alikes. File CMYK colours first so they lead their groups.
+  const isPrint = (r) => r.space === 'CMYK';
+  const order = [...raw.values()].sort((x, y) => (isPrint(y) - isPrint(x)) || (y.area - x.area));
+  const groups = [];
+  for (const r of order) {
+    const lab = hexToLab(r.artHex);
+    let best = null, bestDE = Infinity;
+    if (!splits.has(r.key)) {
+      for (const g of groups) {
+        if (g.split) continue;
+        const limit = isPrint(r) && isPrint(g.members[0]) ? 1.5 : 5;
+        const d = deltaE2000(lab, g.lab);
+        if (d <= limit && d < bestDE) { best = g; bestDE = d; }
+      }
+    }
+    if (best) best.members.push(r);
+    else groups.push({ members: [r], lab, split: splits.has(r.key) });
+  }
+  // 3. Brand colours, keeping what the user already set.
+  const prevByMember = new Map();
+  for (const c of previous) for (const m of c.members || [{ key: c.key }]) prevByMember.set(m.key, c);
+  const colors = groups.map((g) => {
+    const rep = g.members[0];
+    const old = previous.find((c) => c.key === rep.key) || g.members.map((m) => prevByMember.get(m.key)).find(Boolean);
+    const fileCmyk = rep.space === 'CMYK' ? rep.values : rep.space === 'Gray' ? [0, 0, 0, +(1 - rep.values[0]).toFixed(6)] : null;
+    return {
+      key: rep.key, space: rep.space, values: rep.values,
+      members: g.members.map((m) => ({ key: m.key, space: m.space, values: m.values, artHex: m.artHex, files: m.files.size })),
+      artHex: rep.artHex, // how the leading artwork colour renders (colour-managed CMYK -> sRGB)
+      cmyk: fileCmyk || old?.cmyk || null,
+      cmykSource: fileCmyk ? 'file' : (old?.cmyk ? old.cmykSource : null),
+      hex: old?.hex || rep.artHex, name: old?.name || '', pantone: old?.pantone || '', note: old?.note || '', named: !!old?.named,
+      bg: old ? old.bg : undefined,
+      area: g.members.reduce((n, m) => n + m.area, 0),
+    };
+  });
+  const groupOf = new Map();
+  for (const c of colors) for (const m of c.members) groupOf.set(m.key, c.key);
+  for (const a of assets) {
+    a.colorKeys = [...new Set(a.rawKeys.map((k) => groupOf.get(k)))];
     a.dominantKey = a.colorKeys[0];
   }
-  const colors = [...map.values()];
   // Keep the user's order for colours seen before; new ones: neutrals first (dark to light), then accents by hue.
   const prevIndex = new Map(previous.map((c, i) => [c.key, i]));
   colors.sort((x, y) => {
@@ -106,9 +140,8 @@ export function collectColors(assets, previous = []) {
   const used = new Map();
   for (const c of colors) if (!c.named) {
     const base = autoColorName(E.hexToRgb(c.hex));
-    const list = used.get(base) || [];
-    list.push(c);
-    used.set(base, list);
+    if (!used.has(base)) used.set(base, []);
+    used.get(base).push(c);
   }
   for (const [base, list] of used) {
     list.sort((x, y) => E.luminance(E.hexToRgb(x.hex)) - E.luminance(E.hexToRgb(y.hex)));
@@ -176,34 +209,20 @@ export function nearestPantone(hex, book, maxDE = 4) {
 const ASPECT_MARK = 1.5;
 
 /**
- * Propose role (primary = dark / secondary = light), type (logo / logo-no-tag / mark)
- * and family (grouped by accent colour) for every asset.
+ * Propose role (primary = dark / secondary = light), version and family for every asset.
+ *   version: logo / logo-no-tag (horizontal), stacked / stacked-no-tag, mark
+ *   family:  grouped by accent colour (e.g. Strategy blue, Creative gold)
  */
 export function classify(assets, colors) {
   const byKey = new Map(colors.map((c) => [c.key, c]));
   const rgbOf = (k) => E.hexToRgb(byKey.get(k)?.hex || '#000000');
+  const count = (a) => a.analysis.elements.length;
 
   for (const a of assets) {
     a.role = E.luminance(rgbOf(a.dominantKey)) < 0.5 ? 'primary' : 'secondary';
     a.aspect = a.logo.width / a.logo.height;
     a.accentKey = a.colorKeys.slice(1).find((k) => saturation(rgbOf(k)) > 0.15) || null;
     a.accentHue = a.accentKey ? hue(rgbOf(a.accentKey)) : null;
-  }
-
-  // Types: marks are compact; among same-width logos the simplest is the no-tag version.
-  const wide = assets.filter((a) => a.aspect >= ASPECT_MARK);
-  for (const a of assets) if (a.aspect < ASPECT_MARK) a.type = 'mark';
-  const groups = new Map();
-  for (const a of wide) {
-    const k = Math.round(a.logo.width);
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(a);
-  }
-  for (const g of groups.values()) {
-    const counts = g.map((a) => a.analysis.elements.length);
-    const min = Math.min(...counts);
-    const distinct = new Set(counts).size > 1;
-    for (const a of g) a.type = distinct && a.analysis.elements.length === min ? 'logo-no-tag' : 'logo';
   }
 
   // Families: cluster by accent hue.
@@ -217,8 +236,37 @@ export function classify(assets, colors) {
     if (a.accentKey) fam.accentKeys.add(a.accentKey);
     a.familyId = fam.id;
   }
+
+  // Marks: compact and much simpler than the wordmark logos.
+  const wideCounts = assets.filter((a) => a.aspect >= 2.5).map(count).sort((x, y) => x - y);
+  const median = wideCounts.length ? wideCounts[Math.floor(wideCounts.length / 2)] : null;
+  for (const a of assets) a.isMark = a.aspect < ASPECT_MARK && (median === null || count(a) <= Math.max(6, 0.45 * median));
+  // Layouts: when the logos fall into a wide and a narrower group, the narrower one is stacked.
+  const logos = assets.filter((a) => !a.isMark);
+  const logA = logos.map((a) => Math.log(a.aspect)).sort((x, y) => x - y);
+  let cut = null, gap = 0;
+  for (let i = 1; i < logA.length; i++) if (logA[i] - logA[i - 1] > gap) { gap = logA[i] - logA[i - 1]; cut = (logA[i] + logA[i - 1]) / 2; }
+  const twoLayouts = gap > Math.log(1.5);
+  for (const a of logos) a.layout = twoLayouts && Math.log(a.aspect) < cut ? 'stacked' : 'horizontal';
+  // Tagline: within a family + layout + role, the clearly simpler artwork is the version without tagline.
+  const sets = new Map();
+  for (const a of logos) {
+    const k = [a.familyId, a.layout, a.role].join('|');
+    if (!sets.has(k)) sets.set(k, []);
+    sets.get(k).push(a);
+  }
+  for (const g of sets.values()) {
+    const counts = g.map(count);
+    const min = Math.min(...counts), max = Math.max(...counts);
+    for (const a of g) {
+      const noTag = max >= 1.25 * min && count(a) < (min + max) / 2;
+      a.type = a.layout === 'stacked' ? (noTag ? 'stacked-no-tag' : 'stacked') : (noTag ? 'logo-no-tag' : 'logo');
+    }
+  }
+  for (const a of assets) if (a.isMark) a.type = 'mark';
+
   // Main family: the one holding the most detailed tagged logo.
-  const score = (f) => Math.max(0, ...assets.filter((a) => a.familyId === f.id && a.type === 'logo').map((a) => a.analysis.elements.length));
+  const score = (f) => Math.max(0, ...assets.filter((a) => a.familyId === f.id && (a.type === 'logo' || a.type === 'stacked')).map(count));
   const main = families.slice().sort((x, y) => score(y) - score(x))[0];
   if (main) main.isMain = true;
   for (const f of families) {
@@ -235,9 +283,11 @@ export function classify(assets, colors) {
 /* ------------------------------------------------------------------ */
 
 export const TYPES = [
-  { id: 'logo', label: 'Logo', folder: 'Logo', desc: 'The main logo, with tagline' },
-  { id: 'logo-no-tag', label: 'Logo, no tag', folder: 'Logo_No-Tag', desc: 'The logo without its tagline' },
-  { id: 'mark', label: 'Mark', folder: 'Mark', desc: 'The standalone symbol' },
+  { id: 'logo', label: 'Logo', folder: 'Logo', desc: 'The main logo, with tagline', label2: '' },
+  { id: 'logo-no-tag', label: 'Logo, no tag', folder: 'Logo_No-Tag', desc: 'The logo without its tagline', label2: 'no-tag' },
+  { id: 'stacked', label: 'Stacked logo', folder: 'Stacked_Logo', desc: 'The stacked layout, with tagline', label2: 'stacked' },
+  { id: 'stacked-no-tag', label: 'Stacked, no tag', folder: 'Stacked_Logo_No-Tag', desc: 'The stacked layout without its tagline', label2: 'stacked-no-tag' },
+  { id: 'mark', label: 'Mark', folder: 'Mark', desc: 'The standalone symbol', label2: 'mark' },
 ];
 export const ROLES = [
   { id: 'primary', label: 'Primary', desc: 'Dark logo for light backgrounds' },
@@ -247,12 +297,12 @@ export const ROLES = [
 export const familyOf = (brand, a) => brand.families.find((f) => f.id === a.familyId);
 export const familyTitle = (brand, f) => [brand.name, f?.name].filter(Boolean).join(' ');
 
-/** company[-family][-mark|-no-tag]-primary|secondary  (the tagged logo is the main logo: no suffix) */
+/** company[-family][-stacked][-no-tag | -mark]-primary|secondary  (the horizontal tagged logo is the main logo: no label) */
 export function assignNames(brand) {
   const seen = new Map();
   for (const a of brand.assets) {
     const fam = familyOf(brand, a);
-    const parts = [slug(brand.name) || 'brand', slug(fam?.name), a.type === 'mark' ? 'mark' : '', a.type === 'logo-no-tag' ? 'no-tag' : '', a.role];
+    const parts = [slug(brand.name) || 'brand', slug(fam?.name), TYPES.find((t) => t.id === a.type)?.label2, a.role];
     let base = parts.filter(Boolean).join('-');
     const n = (seen.get(base) || 0) + 1;
     seen.set(base, n);
@@ -265,8 +315,9 @@ export function assignNames(brand) {
 /* Backgrounds                                                          */
 /* ------------------------------------------------------------------ */
 
+/** Every colour found in the files, mapped to its brand colour's official RGB. */
 export function brandColorEntries(brand) {
-  return brand.colors.map((c) => ({ space: c.space, values: c.values, rgb: E.hexToRgb(c.hex) }));
+  return brand.colors.flatMap((c) => (c.members || [c]).map((m) => ({ space: m.space, values: m.values, rgb: E.hexToRgb(c.hex) })));
 }
 
 /** JPG backgrounds: plain white instead of the light brand colour (default), dark brand colour as is. */
@@ -343,7 +394,7 @@ export function pick(brand, prefer, role, familyId = mainFamily(brand)?.id) {
 
 /** Digital PDF (official RGB) for an asset, cached. */
 export function rgbPdf(brand, a) {
-  const sig = brand.colors.map((c) => c.key + c.hex).join('|');
+  const sig = brand.colors.map((c) => c.key + c.hex + (c.members || []).length).join('|');
   if (a._rgbSig !== sig) { a._rgb = E.brandRgbPdf(a.logo.pdf, brandColorEntries(brand)); a._rgbSig = sig; }
   return a._rgb;
 }
@@ -504,41 +555,45 @@ export function packageOutline(brand) {
   return rows;
 }
 
-const isCmykAsset = (a) => a.colorKeys.every((k) => k.startsWith('CMYK:') || k.startsWith('Gray:'));
+const isCmykAsset = (a) => (a.rawKeys || a.colorKeys).every((k) => k.startsWith('CMYK:') || k.startsWith('Gray:'));
 
-/** An uploaded SVG is shipped as is when none of its colours were changed. */
-function originalSvgUsable(brand, a) {
-  if (a.logo.kind !== 'svg' || !a.logo.svgText) return false;
-  const byKey = new Map(brand.colors.map((c) => [c.key, c]));
-  return a.colorKeys.every((k) => { const c = byKey.get(k); return c && c.hex.toUpperCase() === c.artHex.toUpperCase(); });
+/** The colours found in this asset's file, each with the brand colour it belongs to. */
+function assetMembers(brand, a) {
+  const raw = new Set(a.rawKeys || a.colorKeys);
+  const out = [];
+  for (const c of brand.colors) for (const m of c.members || [c]) if (raw.has(m.key)) out.push({ m, c });
+  return out;
 }
 
-/** Colours of an asset that will be converted automatically for print (no official CMYK). */
+/** An uploaded SVG is shipped as is when every colour in it keeps its own value. */
+function originalSvgUsable(brand, a) {
+  if (a.logo.kind !== 'svg' || !a.logo.svgText) return false;
+  return assetMembers(brand, a).every(({ m, c }) => c.hex.toUpperCase() === m.artHex.toUpperCase());
+}
+
+/** Brand colours in an asset's screen-colour (RGB) parts that have no CMYK yet: converted automatically for print. */
 export function unspecifiedPrintColors(brand, a) {
-  return brand.colors.filter((c) => a.colorKeys.includes(c.key) && !c.cmyk);
+  const list = assetMembers(brand, a).filter(({ m, c }) => m.space === 'RGB' && !c.cmyk).map(({ c }) => c);
+  return [...new Set(list)];
 }
 
 /**
- * Print (CMYK) PDF. CMYK artwork is used as is. RGB colours take the official
- * CMYK entered for them; any colour without one is converted by Ghostscript.
+ * Print (CMYK) PDF. CMYK artwork is used as is. Screen colours take their
+ * brand colour's CMYK (from the EPS in the same group, or entered); any colour
+ * without one is converted by Ghostscript.
  */
 export async function printPdf(brand, a) {
   if (isCmykAsset(a)) return a.logo.pdf;
-  const byKey = new Map(brand.colors.map((c) => [c.key, c]));
-  const official = new Map();
-  for (const k of a.colorKeys) { const c = byKey.get(k); if (c?.cmyk && c.space !== 'CMYK') official.set(k, c.cmyk); }
+  const pairs = assetMembers(brand, a).filter(({ m, c }) => m.space !== 'CMYK' && c.cmyk);
   let pdf = E.recolorPdf(a.logo.pdf, (space, values) => {
-    const key = space + ':' + values.map((v) => +v.toFixed(6)).join(',');
-    for (const [k, cmyk] of official) {
-      const c = byKey.get(k);
-      if (c.space === space && c.values.every((v, i) => Math.abs(v - values[i]) < 0.0005)) return { space: 'CMYK', values: cmyk };
+    for (const { m, c } of pairs) {
+      if (m.space === space && m.values.every((v, i) => Math.abs(v - values[i]) < 0.0005)) return { space: 'CMYK', values: c.cmyk };
     }
-    void key;
     return null;
   });
   if (unspecifiedPrintColors(brand, a).length) {
     pdf = await E.toCmykPdf(pdf);
-    pdf = E.snapColors(pdf, [...official.values()].map((v) => ({ space: 'CMYK', values: v })));
+    pdf = E.snapColors(pdf, pairs.map(({ c }) => ({ space: 'CMYK', values: c.cmyk })));
   }
   return pdf;
 }
@@ -567,7 +622,7 @@ export async function buildPackage(brand, out, opts = {}) {
     const dir = L.assetDir(a);
     const print = `${dir}/01_Print_CMYK`, digital = `${dir}/02_Digital_RGB`;
     const pdfPrint = await printPdf(brand, a);
-    const cmykSources = brand.colors.filter((c) => c.cmyk && a.colorKeys.includes(c.key)).map((c) => ({ space: 'CMYK', values: c.cmyk }));
+    const cmykSources = assetMembers(brand, a).filter(({ c }) => c.cmyk).map(({ c }) => ({ space: 'CMYK', values: c.cmyk }));
     // EPS: the designer's original file, untouched, when it is already CMYK.
     out(`${print}/01_EPS/${a.base}-cmyk.eps`, a.logo.kind === 'eps' && isCmykAsset(a) ? a.bytes : await E.toEpsExact(pdfPrint, cmykSources));
     out(`${print}/02_PDF/${a.base}-cmyk.pdf`, pdfPrint);

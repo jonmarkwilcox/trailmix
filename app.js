@@ -6,7 +6,7 @@ import { buildGuide } from './guide.js';
 /* State                                                                */
 /* ------------------------------------------------------------------ */
 
-const brand = { name: '', assets: [], colors: [], families: [] };
+const brand = { name: '', assets: [], colors: [], families: [], splits: new Set() };
 let nextId = 1;
 let busy = false;
 const pending = [];
@@ -94,7 +94,7 @@ const hueClose = (a, b) => (a === null && b === null) || (a !== null && b !== nu
 function rescan() {
   const prevFams = brand.families.map((f) => ({ hue: f.hue, name: f.name, isMain: f.isMain, touched: f.touched }));
   const overrides = new Map(brand.assets.filter((a) => a.override).map((a) => [a.id, a.override]));
-  brand.colors = P.collectColors(brand.assets, brand.colors);
+  brand.colors = P.collectColors(brand.assets, brand.colors, brand.splits);
   brand.families = P.classify(brand.assets, brand.colors);
   for (const f of brand.families) {
     const old = prevFams.find((o) => o.touched && hueClose(o.hue, f.hue));
@@ -129,7 +129,8 @@ const colorSub = (c) => {
   if (c.cmykSource === 'file') return `CMYK ${P.cmykText(c.cmyk)} <span class="exact">from file</span> · ${rgb}`;
   return `${rgb} <span class="exact">from file</span>${c.cmyk ? ` · CMYK ${P.cmykText(c.cmyk)} <span class="exact">entered</span>` : ''}`;
 };
-const needsCmyk = (c) => c.space !== 'CMYK' && c.space !== 'Gray';
+const needsCmyk = (c) => c.cmykSource !== 'file' && (c.members || [c]).some((m) => m.space === 'RGB');
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
 function renderColors() {
   $('#colors').innerHTML = brand.colors.map((c, i) => `
@@ -143,6 +144,10 @@ function renderColors() {
           <input type="text" value="${c.hex.toUpperCase()}" data-act="hex" aria-label="${esc(c.name)} HEX" class="in-hex" maxlength="7" spellcheck="false">
         </div>
         <div class="sub">${colorSub(c)}</div>
+        ${(c.members || []).length > 1 ? `<div class="variants"><span class="v-title">Slight variations in your files, using this color:</span>${c.members.slice(1).map((m) => `
+          <span class="variant"><i style="background:${m.artHex}"></i><code>${m.artHex}</code> <span class="v-files">${plural(m.files, 'file')}</span>
+          <button type="button" class="link" data-act="split" data-member="${esc(m.key)}">Keep separate</button></span>`).join('')}</div>` : ''}
+        ${brand.splits.has(c.key) ? `<div class="variants"><button type="button" class="link" data-act="unsplit">Group again with similar colors</button></div>` : ''}
         ${needsCmyk(c) ? `<input type="text" inputmode="decimal" value="${c.cmyk ? c.cmyk.map(pct).join(' ') : ''}" data-act="cmyk" placeholder="Official CMYK for print, e.g. 66 65 68 70" aria-label="${esc(c.name)} official CMYK" class="in-cmyk">
         <div class="cmyk-warn" ${c.cmyk ? 'hidden' : ''}>No CMYK in the file. Print files use an automatic conversion until you enter the official values.</div>` : ''}
         <div class="art-warn" ${c.artHex && c.hex.toUpperCase() !== c.artHex.toUpperCase() ? '' : 'hidden'}>The artwork renders as <code>${c.artHex}</code>. <button type="button" class="link" data-act="use-art">Use artwork value</button></div>
@@ -217,6 +222,8 @@ $('#suggest-pantone').addEventListener('click', async () => {
 });
 
 $('#colors').addEventListener('click', (e) => {
+  if (e.target.dataset.act === 'split') { brand.splits.add(e.target.dataset.member); rescan(); return; }
+  if (e.target.dataset.act === 'unsplit') { brand.splits.delete(e.target.closest('.color-row').dataset.key); rescan(); return; }
   if (e.target.dataset.act === 'use-art') {
     const c = brand.colors.find((x) => x.key === e.target.closest('.color-row').dataset.key);
     c.hex = c.artHex;

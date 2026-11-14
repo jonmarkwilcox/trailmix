@@ -254,8 +254,8 @@ export function buildGuide(brand) {
   const neutrals = colors.filter((c) => P.isNeutral(rgbOf(c.hex)));
   const light = P.lightBackground(brand);
   const mainF = P.mainFamily(brand);
-  const prim = P.pick(brand, ['logo', 'logo-no-tag', 'mark'], 'primary');
-  const sec = P.pick(brand, ['logo', 'logo-no-tag', 'mark'], 'secondary');
+  const prim = P.pick(brand, ['logo', 'logo-no-tag', 'stacked', 'stacked-no-tag', 'mark'], 'primary');
+  const sec = P.pick(brand, ['logo', 'logo-no-tag', 'stacked', 'stacked-no-tag', 'mark'], 'secondary');
   const dark = P.darkBackground(brand);
   void neutrals;
   const formOf = (a) => (a ? g.form('a' + a.id, P.rgbPdf(brand, a)) : null);
@@ -372,6 +372,8 @@ export function buildGuide(brand) {
     const usage = {
       logo: 'The main logo. Use it whenever there is room for the tagline to be read: websites, documents, signage, presentations.',
       'logo-no-tag': 'For small sizes and tight spaces where the tagline would be too small to read, or when the tagline already appears nearby.',
+      stacked: 'For square and upright spaces where the horizontal logo would be too small: signs, packaging, merchandise, social posts.',
+      'stacked-no-tag': 'The stacked layout for small square spaces, or when the tagline already appears nearby.',
       mark: 'The symbol on its own. For square and very small spaces: social profile pictures, favicons, app icons, stamps and merchandise details.',
     };
     const cw = (W - 2 * M - 40 * (types.length - 1)) / types.length;
@@ -437,7 +439,7 @@ export function buildGuide(brand) {
   add((pg, n) => {
     chrome(pg, n);
     heading(pg, 'Minimum size', 'Below these sizes details fill in and text becomes unreadable. Never reproduce the logo smaller.');
-    const spec = { logo: [38, 1.5, 160], 'logo-no-tag': [25, 1, 100], mark: [8, 0.3, 24] };
+    const spec = { logo: [38, 1.5, 160], 'logo-no-tag': [25, 1, 100], stacked: [25, 1, 120], 'stacked-no-tag': [20, 0.8, 90], mark: [8, 0.3, 24] };
     const cw = (W - 2 * M - 40 * (types.length - 1)) / types.length;
     types.forEach((t, i) => {
       const a = P.find(brand, mainF.id, t.id, 'primary') || P.pick(brand, [t.id], 'primary');
@@ -595,7 +597,7 @@ export function buildGuide(brand) {
     pg.path('M110 130V70C110 30 140 8 175 8H225C260 8 290 30 290 70V130', { stroke: shade(w.bg), lw: 26, m, cap: 0 });
     pg.path('M24 128H376L356 470C355 482 348 488 336 488H64C52 488 45 482 44 470Z', { fill: w.bg, stroke: E.luminance(rgbOf(w.bg)) > 0.85 ? '#D4D4D8' : undefined, lw: 1.5, m });
     pg.path('M24 128H376L374 150H26Z', { fill: shade(w.bg), m });
-    pg.logo(formOf(wayAsset(w)), cx - 120, 600 - 40, 240, 150);
+    pg.logo(formOf(wayAsset(w, ['stacked', 'logo', 'logo-no-tag', 'mark'])), cx - 120, 600 - 40, 240, 150);
   }), 'Tote bags');
 
   add(mockPage('Drinkware', 'A consistent identity on light and dark surfaces.', (pg, cx, w) => {
@@ -613,8 +615,8 @@ export function buildGuide(brand) {
     shadowUnder(pg, cx, 852, 300);
     pg.path('M140 20C160 48 240 48 260 20L350 58L398 170L334 196L312 150V488H88V150L66 196L2 170L50 58Z', { fill: w.bg, stroke: E.luminance(rgbOf(w.bg)) > 0.85 ? '#D4D4D8' : shade(w.bg), lw: 2, m });
     pg.path('M140 20C160 48 240 48 260 20', { stroke: shade(w.bg), lw: 10, m });
-    const a = wayAsset(w, ['logo-no-tag', 'logo', 'mark']);
-    pg.logo(formOf(a), cx - 80, 590 - 150, 160, 60, { align: 'center' });
+    const a = wayAsset(w, ['stacked-no-tag', 'logo-no-tag', 'logo', 'mark']);
+    pg.logo(formOf(a), cx - 80, 590 - 165, 160, a.aspect < 3 ? 90 : 60, { align: 'center' });
   }), 'Apparel');
 
   add((pg, n) => {
@@ -700,7 +702,7 @@ export function buildGuide(brand) {
     const parts = [
       [P.slug(brand.name), 'Company'],
       fam?.name ? [P.slug(fam.name), 'Brand family'] : null,
-      sampleA.type === 'mark' ? ['mark', 'Version: mark'] : sampleA.type === 'logo-no-tag' ? ['no-tag', 'Version: no tagline'] : null,
+      (() => { const t = P.TYPES.find((x) => x.id === sampleA.type); return t?.label2 ? [t.label2, `Version: ${t.label.toLowerCase()}`] : null; })(),
       [sampleA.role, sampleA.role === 'primary' ? 'Primary (dark)' : 'Secondary (light)'],
       ['rgb', 'Color mode'],
       ['1024px', 'Size'],
@@ -718,7 +720,7 @@ export function buildGuide(brand) {
     pg.text('.png', x + 4, y, { size: 44, color: '#A1A1AA' });
     const notes = [
       ['Company first', `Every file starts with ${P.slug(brand.name)}.`],
-      ['The main logo has no extra label', 'The logo with its tagline is the main logo. Versions without the tagline add "no-tag"; the symbol on its own adds "mark".'],
+      ['The main logo has no extra label', 'The horizontal logo with its tagline is the main logo. Other versions say what they are: "no-tag" (without the tagline), "stacked" (stacked layout) and "mark" (the symbol on its own).'],
       ['Primary and secondary', 'Primary is the dark logo for light backgrounds. Secondary is the light logo for dark backgrounds.'],
       ['Color mode', '"cmyk" files are for print. "rgb" files are for screens. JPGs add the background color, for example "on-white".'],
     ];
