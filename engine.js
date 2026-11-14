@@ -1,4 +1,4 @@
-// Logo Pack engine: everything runs in the browser.
+// TrailMix engine: everything runs in the browser.
 //
 //   Ghostscript (WASM) reads EPS/PS/AI/PDF, finds the artwork's bounding box,
 //   converts color spaces (CMYK / Gray) and writes EPS.

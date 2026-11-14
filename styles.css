@@ -1,45 +1,51 @@
+/* FoundMark palette (as the artwork renders):
+   Bark #2A2521 · Blaze White #F9F6EF · Weathered Red #9B4321 · Weathered Red, light #C25C37
+   Trail Blue #2C5D8A · Trail Blue, light #4B7CAB · Spur Yellow #D9A527 */
 :root {
-  --bg: #f6f6f8;
-  --surface: #ffffff;
-  --surface-2: #f1f1f4;
-  --text: #17171c;
-  --muted: #62626e;
-  --line: #e2e2e8;
-  --accent: #4338ca;
-  --accent-ink: #ffffff;
-  --accent-soft: #eef0ff;
-  --danger: #b42318;
-  --ok: #0f7a4a;
-  --shadow: 0 1px 2px rgba(16, 16, 24, .06), 0 4px 16px rgba(16, 16, 24, .05);
+  --bg: #F9F6EF;            /* Blaze White */
+  --surface: #FFFDF9;
+  --surface-2: #F1ECE2;
+  --text: #2A2521;          /* Bark */
+  --muted: #6F665D;
+  --line: #E3DBCE;
+  --accent: #9B4321;        /* Weathered Red: the core blaze */
+  --accent-ink: #F9F6EF;
+  --accent-soft: #F4E4DA;
+  --danger: #9B2C21;
+  --ok: #2C5D8A;            /* Trail Blue */
+  --signal: #D9A527;        /* Spur Yellow */
+  --warn-text: #7A5A0E;
+  --shadow: 0 1px 2px rgba(42, 37, 33, .06), 0 4px 16px rgba(42, 37, 33, .06);
   --radius: 14px;
-  --check-a: #ffffff;
-  --check-b: #e9e9ee;
+  --check-a: #FFFDF9;
+  --check-b: #EEE7DA;
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #111114;
-    --surface: #1b1b20;
-    --surface-2: #24242b;
-    --text: #ececf1;
-    --muted: #a0a0ad;
-    --line: #2f2f38;
-    --accent: #8b8cf8;
-    --accent-ink: #12121a;
-    --accent-soft: #25254a;
-    --danger: #ff8a7a;
-    --ok: #5fd39a;
+    --bg: #2A2521;          /* Bark */
+    --surface: #332D28;
+    --surface-2: #3D3630;
+    --text: #F9F6EF;        /* Blaze White */
+    --muted: #B8AEA0;
+    --line: #4A423A;
+    --accent: #C25C37;      /* Weathered Red, light: red for use on Bark */
+    --accent-ink: #F9F6EF;
+    --accent-soft: #4A3328;
+    --danger: #E58A72;
+    --ok: #4B7CAB;          /* Trail Blue, light */
+    --warn-text: #D9A527;
     --shadow: none;
-    --check-a: #2a2a31;
-    --check-b: #222228;
+    --check-a: #3D3630;
+    --check-b: #342E29;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #111114; --surface: #1b1b20; --surface-2: #24242b; --text: #ececf1; --muted: #a0a0ad;
-  --line: #2f2f38; --accent: #8b8cf8; --accent-ink: #12121a; --accent-soft: #25254a;
-  --danger: #ff8a7a; --ok: #5fd39a; --shadow: none; --check-a: #2a2a31; --check-b: #222228;
+  --bg: #2A2521; --surface: #332D28; --surface-2: #3D3630; --text: #F9F6EF; --muted: #B8AEA0;
+  --line: #4A423A; --accent: #C25C37; --accent-ink: #F9F6EF; --accent-soft: #4A3328;
+  --danger: #E58A72; --ok: #4B7CAB; --warn-text: #D9A527; --shadow: none; --check-a: #3D3630; --check-b: #342E29;
   color-scheme: dark;
 }
 
@@ -62,7 +68,16 @@ h2 label { cursor: pointer; }
 /* Header */
 .top { background: var(--surface); border-bottom: 1px solid var(--line); }
 .top-inner { display: flex; align-items: center; gap: 14px; padding-top: 14px; padding-bottom: 14px; }
-.brandmark { width: 36px; height: 36px; flex: none; }
+.fm-mark { width: 26px; height: 42px; flex: none; display: block; }
+.fm-mark svg { width: 100%; height: 100%; display: block; }
+.fm-mark .mk-on-dark { display: none; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .fm-mark .mk-on-light { display: none; } :root:not([data-theme="light"]) .fm-mark .mk-on-dark { display: block; } }
+:root[data-theme="dark"] .fm-mark .mk-on-light { display: none; }
+:root[data-theme="dark"] .fm-mark .mk-on-dark { display: block; }
+h1 { font-family: "Iowan Old Style", "Charter", "Palatino Linotype", Georgia, "Times New Roman", serif; font-size: 24px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.1; }
+.tag .by { color: var(--accent); font-weight: 600; white-space: nowrap; }
+.dropzone strong { font-family: "Iowan Old Style", "Charter", "Palatino Linotype", Georgia, serif; font-size: 24px; }
+.foot a { color: inherit; }
 .tag { margin: 0; color: var(--muted); font-size: 14px; }
 .pill { margin-left: auto; font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
 .pill.ok { color: var(--ok); }
@@ -253,7 +268,7 @@ label.color-sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer
 .color-row .in-note, .color-row .in-pms { margin-top: 6px; font-weight: 400; }
 .move-up { font-size: 16px; padding: 4px; }
 .move-up:hover { color: var(--accent); }
-.art-warn { font-size: 12px; color: #b45309; margin-top: 4px; }
+.art-warn { font-size: 12px; color: var(--warn-text); margin-top: 4px; }
 .art-warn code { font-size: 12px; }
 .link { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; }
 .bg-role { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-top: 6px; }
@@ -272,10 +287,10 @@ label.color-sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer
   body { padding-bottom: 150px; }
   .top-inner { flex-wrap: nowrap; gap: 10px; padding-top: 10px; padding-bottom: 10px; }
   .top-inner > div { min-width: 0; }
-  h1 { font-size: 18px; }
   .tag { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pill { margin-left: auto; font-size: 11px; padding: 3px 8px; }
-  .brandmark { width: 32px; height: 32px; }
+  .fm-mark { width: 22px; height: 36px; }
+  h1 { font-size: 21px; }
   .drop-hero { padding-top: 20px; }
   .dropzone { padding: 32px 16px; }
   .how { margin-top: 18px; }
@@ -290,7 +305,7 @@ label.color-sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer
     border: 1px solid var(--line); background: var(--surface); color: var(--muted); position: relative;
   }
   .tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-  .dot { position: absolute; top: 8px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; }
+  .dot { position: absolute; top: 8px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--signal); }
   .workspace[data-tab="logos"] .settings,
   .workspace[data-tab="logos"] #guide-section,
   .workspace[data-tab="logos"] #guide-empty,
@@ -343,3 +358,4 @@ label.color-sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer
   .color-fields input.in-name { flex: 1 1 100%; }
   .color-fields input.in-hex { flex: 1 1 100%; }
 }
+@media (max-width: 700px) { .tag .slogan { display: none; } }

@@ -1,12 +1,12 @@
 {
-  "name": "Logo Pack",
-  "short_name": "Logo Pack",
-  "description": "Turn a brand's EPS logo files into a complete client package with brand guidelines.",
+  "name": "TrailMix by FoundMark",
+  "short_name": "TrailMix",
+  "description": "Turn a brand's EPS logo files into a complete client package with brand guidelines. By FoundMark Creative.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f6f6f8",
-  "theme_color": "#4338ca",
+  "background_color": "#F9F6EF",
+  "theme_color": "#2A2521",
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },

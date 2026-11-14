@@ -1,7 +1,7 @@
 // Service worker: keeps the ~26 MB of converters (vendor/) cached so repeat
 // visits open instantly and work offline. App files are network-first so
 // updates show up right away. Bump CACHE when anything in vendor/ changes.
-const CACHE = 'logo-pack-v1';
+const CACHE = 'trailmix-v1';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil((async () => {
