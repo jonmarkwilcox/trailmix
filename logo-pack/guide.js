@@ -252,11 +252,12 @@ export function buildGuide(brand) {
   const colors = brand.colors;
   const byKey = new Map(colors.map((c) => [c.key, c]));
   const neutrals = colors.filter((c) => P.isNeutral(rgbOf(c.hex)));
-  const light = neutrals.filter((c) => E.luminance(rgbOf(c.hex)) > 0.75).sort((a, b) => E.luminance(rgbOf(b.hex)) - E.luminance(rgbOf(a.hex)))[0]?.hex || '#F5F5F4';
+  const light = P.lightBackground(brand);
   const mainF = P.mainFamily(brand);
   const prim = P.pick(brand, ['logo', 'logo-no-tag', 'mark'], 'primary');
   const sec = P.pick(brand, ['logo', 'logo-no-tag', 'mark'], 'secondary');
-  const dark = byKey.get(prim?.dominantKey)?.hex && E.luminance(rgbOf(byKey.get(prim.dominantKey).hex)) < 0.3 ? byKey.get(prim.dominantKey).hex : '#111111';
+  const dark = P.darkBackground(brand);
+  void neutrals;
   const formOf = (a) => (a ? g.form('a' + a.id, P.rgbPdf(brand, a)) : null);
   const markP = P.pick(brand, ['mark', 'logo-no-tag', 'logo'], 'primary');
   const markS = P.pick(brand, ['mark', 'logo-no-tag', 'logo'], 'secondary');
@@ -474,6 +475,7 @@ export function buildGuide(brand) {
       if (c.pantone) lines.push(`PANTONE  ${c.pantone}`);
       lines.forEach((t, j) => pg.text(t, x, ty + j * 24, { size: 16, color: MUTED }));
     });
+    if (brand.pantoneSuggested && colors.some((c) => c.pantone)) caption(pg, 'Pantone values are the closest PANTONE+ Solid Coated matches to the artwork colors. Confirm them against a printed Pantone guide before press.', M, 1000);
   }, 'Brand colors');
 
   /* 11. Backgrounds --------------------------------------------------- */
@@ -481,16 +483,21 @@ export function buildGuide(brand) {
     chrome(pg, n);
     heading(pg, 'Background usage', 'Approved combinations. Every color in the logo keeps enough contrast against these backgrounds.');
     const combos = [];
-    for (const a of [prim, sec]) if (a) for (const bg of P.backgroundsFor(brand, a)) combos.push({ a, bg });
+    for (const f of fams) {
+      for (const role of ['primary', 'secondary']) {
+        const a = P.find(brand, f.id, 'logo', role) || P.pick(brand, ['logo', 'logo-no-tag', 'mark'], role, f.id);
+        if (a && a.familyId === f.id) for (const bg of P.backgroundsFor(brand, a)) combos.push({ a, bg, f });
+      }
+    }
     const list = combos.slice(0, 6);
     const per = 3, cw = (W - 2 * M - 60) / per, ch = 250;
-    list.forEach(({ a, bg }, i) => {
+    list.forEach(({ a, bg, f }, i) => {
       const x = M + (i % per) * (cw + 30), y = 290 + Math.floor(i / per) * (ch + 90);
-      tile(pg, x, y, cw, ch, bg.hex, bg.hex === '#FFFFFF');
+      tile(pg, x, y, cw, ch, bg.hex, E.luminance(rgbOf(bg.hex)) > 0.9);
       pg.logo(formOf(a), x + 60, y + 50, cw - 120, ch - 100);
-      caption(pg, `${a.role === 'primary' ? 'Primary' : 'Secondary'} on ${bg.name}  •  ${bg.hex}`, x, y + ch + 14);
+      caption(pg, `${famTitle(f)} ${a.role} on ${bg.name}  \u2022  ${bg.hex}`, x, y + ch + 14);
     });
-    caption(pg, 'Avoid busy photos and colors that blend into any part of the logo. When in doubt, use white or the darkest brand color.', M, 1000);
+    caption(pg, `Use the dark (primary) logos on ${colors.find((c) => c.bg === 'light')?.name || 'light backgrounds'} and the light (secondary) logos on ${colors.find((c) => c.bg === 'dark')?.name || 'dark backgrounds'}. Avoid busy photos and other colors.`, M, 1000);
   }, 'Background usage');
 
   /* 12. Incorrect usage ---------------------------------------------- */
@@ -536,35 +543,38 @@ export function buildGuide(brand) {
   }, 'Brand applications');
   pages[pages.length - 1].bg = light;
 
-  // Colorways for mockups: light neutral + primary, dark + secondary, plus an accent when one passes.
-  const ways = [
-    { name: colors.find((c) => c.hex === light)?.name || 'Light', bg: light, role: 'primary' },
-    { name: byKey.get(prim?.dominantKey)?.name || 'Dark', bg: dark, role: 'secondary' },
-  ];
-  const accentWay = (() => {
-    for (const c of colors.filter((c) => !P.isNeutral(rgbOf(c.hex)) && mainF.accentKeys.has(c.key))) {
-      for (const a of brand.assets.filter((x) => x.familyId === mainF.id)) {
-        if (P.backgroundsFor(brand, a).some((b) => b.hex === c.hex.toUpperCase())) return { name: c.name, bg: c.hex, asset: a };
-      }
-    }
-    const black = sec && P.backgroundsFor(brand, sec).find((b) => b.hex === '#000000');
-    return black ? { name: 'Black', bg: '#111111', role: 'secondary' } : { name: 'White', bg: '#FFFFFF', role: 'primary' };
-  })();
-  ways.splice(1, 0, accentWay);
-  const wayAsset = (w, prefer = ['logo', 'logo-no-tag', 'mark']) => w.asset || P.pick(brand, prefer, w.role);
+  // Mockups use only the brand's background colours: main logo on light and dark,
+  // plus a third item that cycles through the other brand families (or the mark).
+  const bgName = (hex) => colors.find((c) => c.hex.toUpperCase() === hex.toUpperCase())?.name || (E.luminance(rgbOf(hex)) > 0.5 ? 'Light' : 'Dark');
+  const others = fams.filter((f) => f !== mainF);
+  let mockIndex = 0;
+  const waysFor = (k) => {
+    const third = k % 2 === 0 ? { bg: dark, role: 'secondary' } : { bg: light, role: 'primary' };
+    const f = others.length ? others[Math.floor(k / 2) % others.length] : mainF;
+    return [
+      { bg: light, role: 'primary', family: mainF },
+      { bg: dark, role: 'secondary', family: mainF },
+      { ...third, family: f, preferMark: !others.length },
+    ].map((w) => ({ ...w, name: bgName(w.bg) }));
+  };
+  const wayAsset = (w, prefer = ['logo', 'logo-no-tag', 'mark']) => {
+    const order = w.preferMark ? ['mark', ...prefer] : prefer;
+    for (const t of order) { const a = P.find(brand, w.family.id, t, w.role); if (a) return a; }
+    return P.pick(brand, order, w.role);
+  };
   const shade = (hex) => mix(hex, E.luminance(rgbOf(hex)) > 0.5 ? '#000000' : '#FFFFFF', 0.12);
 
-  const mockPage = (titleText, sub, draw) => (pg, n) => {
+  const mockPage = (titleText, sub, draw) => { const k = mockIndex++; return (pg, n) => {
     chrome(pg, n);
     heading(pg, titleText, sub);
     const cw = (W - 2 * M) / 3;
-    ways.forEach((w, i) => {
+    waysFor(k).forEach((w, i) => {
       const cx = M + cw * i + cw / 2;
       draw(pg, cx, w, i);
       pg.text(w.name, cx, 930, { size: 20, align: 'center', font: 'b' });
-      caption(pg, w.role === 'secondary' || (w.asset && w.asset.role === 'secondary') ? 'Secondary logo' : 'Primary logo', cx, 962, { align: 'center' });
+      caption(pg, `${famTitle(w.family)} \u2022 ${w.role === 'secondary' ? 'Secondary' : 'Primary'} logo`, cx, 962, { align: 'center' });
     });
-  };
+  }; };
   const shadowUnder = (pg, cx, y, w) => pg.path(ellipse(cx, y, w / 2, 14), { fill: '#000000', opacity: 0.08 });
 
   add(mockPage('Business cards', 'A simple introduction in the brand palette.', (pg, cx, w) => {
@@ -588,7 +598,7 @@ export function buildGuide(brand) {
     pg.logo(formOf(wayAsset(w)), cx - 120, 600 - 40, 240, 150);
   }), 'Tote bags');
 
-  add(mockPage('Drinkware', 'A consistent identity across light, accent and dark surfaces.', (pg, cx, w) => {
+  add(mockPage('Drinkware', 'A consistent identity on light and dark surfaces.', (pg, cx, w) => {
     const m = mat.mul(mat.t(-75, -250), mat.t(cx, 590));
     shadowUnder(pg, cx, 852, 190);
     pg.path(roundRect(20, 0, 110, 70, 14), { fill: shade(w.bg), m });

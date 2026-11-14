@@ -120,10 +120,8 @@ function rescan() {
 /* Rendering                                                            */
 /* ------------------------------------------------------------------ */
 
-const neutralsBy = (dir) => brand.colors.filter((c) => P.isNeutral(E.hexToRgb(c.hex)))
-  .sort((a, b) => dir * (E.luminance(E.hexToRgb(a.hex)) - E.luminance(E.hexToRgb(b.hex))));
-function darkBg() { const c = neutralsBy(1)[0]; return c && E.luminance(E.hexToRgb(c.hex)) < 0.3 ? c.hex : '#18181B'; }
-function lightBg() { const c = neutralsBy(-1)[0]; return c && E.luminance(E.hexToRgb(c.hex)) > 0.75 ? c.hex : '#FFFFFF'; }
+const darkBg = () => P.darkBackground(brand);
+const lightBg = () => P.lightBackground(brand);
 
 const colorSub = (c) => `${c.cmyk ? `CMYK ${P.cmykText(c.cmyk)} <span class="exact">from file</span>` : `${c.space} ${c.values.map((v) => +(v * 100).toFixed(2)).join(', ')}`} · RGB ${E.hexToRgb(c.hex).map((v) => Math.round(v * 255)).join(' ')}`;
 
@@ -139,10 +137,17 @@ function renderColors() {
           <input type="text" value="${c.hex.toUpperCase()}" data-act="hex" aria-label="${esc(c.name)} HEX" class="in-hex" maxlength="7" spellcheck="false">
         </div>
         <div class="sub">${colorSub(c)}</div>
+        <div class="art-warn" ${c.artHex && c.hex.toUpperCase() !== c.artHex.toUpperCase() ? '' : 'hidden'}>The artwork renders as <code>${c.artHex}</code>. <button type="button" class="link" data-act="use-art">Use artwork value</button></div>
         <div class="color-fields">
           <input type="text" value="${esc(c.note)}" data-act="note" placeholder="Usage note (optional)" aria-label="${esc(c.name)} usage note" class="in-name in-note">
           <input type="text" value="${esc(c.pantone)}" data-act="pantone" placeholder="Pantone" aria-label="${esc(c.name)} Pantone" class="in-hex in-pms">
         </div>
+        <label class="bg-role">Background
+          <select data-act="bg" aria-label="${esc(c.name)} background use">
+            <option value="" ${!c.bg ? 'selected' : ''}>No</option>
+            <option value="light" ${c.bg === 'light' ? 'selected' : ''}>Light background</option>
+            <option value="dark" ${c.bg === 'dark' ? 'selected' : ''}>Dark background</option>
+          </select></label>
       </div>
       ${i > 0 ? `<button class="icon-btn move-up" type="button" data-act="up" title="Move up" aria-label="Move ${esc(c.name)} up">\u2191</button>` : '<span></span>'}
     </div>`).join('') || '<p class="hint">Colors appear after your files are read.</p>';
@@ -161,12 +166,47 @@ $('#colors').addEventListener('input', (e) => {
   if (act === 'hex' || act === 'picker') {
     row.querySelector('.color-sw').style.background = c.hex;
     row.querySelector('.sub').innerHTML = colorSub(c);
+    row.querySelector('.art-warn').hidden = !c.artHex || c.hex.toUpperCase() === c.artHex.toUpperCase();
     clearTimeout(colorTimer);
     colorTimer = setTimeout(() => { renderFamilies(); renderAssets(); }, 300);
   }
 });
 
+$('#colors').addEventListener('change', (e) => {
+  if (e.target.dataset.act !== 'bg') return;
+  const c = brand.colors.find((x) => x.key === e.target.closest('.color-row').dataset.key);
+  const v = e.target.value || null;
+  if (v) brand.colors.forEach((x) => { if (x !== c && x.bg === v) x.bg = null; }); // one light and one dark background
+  c.bg = v;
+  renderColors();
+  renderAssets();
+});
+
+$('#suggest-pantone').addEventListener('click', async () => {
+  const btn = $('#suggest-pantone');
+  btn.disabled = true;
+  try {
+    const book = await (await fetch('vendor/pantone/pantone-plus-solid-coated.json')).json();
+    let n = 0;
+    for (const c of brand.colors) {
+      if (c.pantone) continue;
+      const m = P.nearestPantone(c.artHex || c.hex, book);
+      if (m) { c.pantone = m.name; n++; }
+    }
+    brand.pantoneSuggested = true;
+    renderColors();
+    setProgress(n ? `Suggested ${n} Pantone match(es). Check them against a printed Pantone guide.` : 'No close Pantone matches for the remaining colors.', 0);
+  } catch (e) { setProgress('Could not load Pantone data.', 0); } finally { btn.disabled = false; }
+});
+
 $('#colors').addEventListener('click', (e) => {
+  if (e.target.dataset.act === 'use-art') {
+    const c = brand.colors.find((x) => x.key === e.target.closest('.color-row').dataset.key);
+    c.hex = c.artHex;
+    renderColors();
+    renderAssets();
+    return;
+  }
   if (e.target.dataset.act !== 'up') return;
   const i = brand.colors.findIndex((x) => x.key === e.target.closest('.color-row').dataset.key);
   if (i > 0) [brand.colors[i - 1], brand.colors[i]] = [brand.colors[i], brand.colors[i - 1]];

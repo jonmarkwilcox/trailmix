@@ -6,7 +6,9 @@ Upload a brand's final logo files (EPS, AI or PDF) and download a complete, clie
 
 - **The artwork never changes.** Nothing is redrawn, recolored or regenerated. Each uploaded file is one deliverable.
 - **CMYK is exact.** Print EPS files are the original files, byte for byte. Print PDFs carry the exact CMYK values written in the source file. Ghostscript would otherwise round them to a 1/1024 grid; they are read from the source and written back.
-- **RGB is exact.** Digital files (SVG, PNG, JPG, WebP) use the official HEX value entered for each brand color. They do not use an automatic CMYK→RGB conversion. Pixels are verified to match the HEX exactly.
+- **The artwork is the reference.** By default each color's HEX is how the artwork's exact CMYK renders on screen (color-managed). If you type a different HEX, the app flags the difference and offers the artwork value back. Digital files (SVG, PNG, JPG, WebP) use the HEX exactly; pixels are verified to match.
+- **Brand backgrounds only.** Mark one color as the light background and one as the dark background, for example Blaze White and Bark. JPGs, social images, icons and every mockup in the guide use only those. A logo only gets a background where every color in it keeps enough contrast.
+- **Pantone suggestions.** "Suggest closest Pantone" fills empty Pantone fields with the nearest PANTONE+ Solid Coated match (CIEDE2000, ΔE ≤ 4). The guide adds a note to confirm them against a printed guide.
 
 ## How it works
 
@@ -16,7 +18,7 @@ Upload a brand's final logo files (EPS, AI or PDF) and download a complete, clie
    - **Logo / no-tag / mark**: compact artwork is the mark. Among same-width logos, the one without the extra tagline artwork is "no-tag".
    - **Brand family**: logos are grouped by accent color, for sub-brands such as *Strategy* and *Creative*.
    - **Brand colors**: exact CMYK is read from the files, with a suggested HEX.
-3. **Confirm**: name the company and the families, and enter the official HEX (and Pantone) for each color. You can correct any classification.
+3. **Confirm**: name the company and the families, give colors names and usage notes, choose the light and dark background colors, and optionally suggest Pantone matches. You can correct any classification.
 4. **Download** the package, or preview and download the guidelines on their own.
 
 ## Naming
@@ -44,7 +46,7 @@ FoundMark_Brand_Assets/
 │   │   └── 02_Digital_RGB/
 │   │       ├── 01_SVG/
 │   │       ├── 02_PNG/01_Small … 04_Extra_Large   512 / 1024 / 2048 / 4096 px, transparent
-│   │       ├── 03_JPG/               on each background that passes a contrast check
+│   │       ├── 03_JPG/               on the brand's light or dark background
 │   │       └── 04_WEBP/              same sizes as PNG, lossless
 │   ├── 02_Logo_No-Tag/
 │   └── 03_Mark/

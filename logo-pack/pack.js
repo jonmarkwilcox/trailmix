@@ -76,7 +76,9 @@ export function collectColors(assets, previous = []) {
           key, space, values,
           cmyk: space === 'CMYK' ? values : space === 'Gray' ? [0, 0, 0, +(1 - values[0]).toFixed(6)] : null,
           sourceRgb: space === 'RGB' ? values : null,
+          artHex: c.hex, // how the artwork itself renders (colour-managed CMYK -> sRGB)
           hex: old?.hex || c.hex, name: old?.name || '', pantone: old?.pantone || '', note: old?.note || '', named: !!old?.named,
+          bg: old ? old.bg : undefined,
           area: 0,
         };
         map.set(key, e);
@@ -111,7 +113,63 @@ export function collectColors(assets, previous = []) {
     list.sort((x, y) => E.luminance(E.hexToRgb(x.hex)) - E.luminance(E.hexToRgb(y.hex)));
     list.forEach((c, i) => { c.name = list.length === 1 ? base : i === 0 ? base : `${base} ${i === 1 ? 'Light' : 'Light ' + i}`; });
   }
+  // Background roles: by default the darkest and lightest neutrals.
+  if (!colors.some((c) => c.bg)) {
+    const neutral = colors.filter((c) => isNeutral(E.hexToRgb(c.hex)));
+    const byL = neutral.slice().sort((x, y) => E.luminance(E.hexToRgb(x.hex)) - E.luminance(E.hexToRgb(y.hex)));
+    if (byL[0] && E.luminance(E.hexToRgb(byL[0].hex)) < 0.3) byL[0].bg = 'dark';
+    const top = byL[byL.length - 1];
+    if (top && E.luminance(E.hexToRgb(top.hex)) > 0.75) top.bg = 'light';
+  }
+  for (const c of colors) if (c.bg === undefined) c.bg = null;
   return colors;
+}
+
+/** The brand's light / dark background colours (fall back to white / near-black). */
+export const lightBackground = (brand) => brand.colors.find((c) => c.bg === 'light')?.hex || '#FFFFFF';
+export const darkBackground = (brand) => brand.colors.find((c) => c.bg === 'dark')?.hex || '#111111';
+
+/* ------------------------------------------------------------------ */
+/* Pantone suggestions (CIEDE2000 against a reference book)             */
+/* ------------------------------------------------------------------ */
+
+function hexToLab(hex) {
+  const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const [r, g, b] = E.hexToRgb(hex).map(lin);
+  const X = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047, Y = 0.2126 * r + 0.7152 * g + 0.0722 * b, Z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  return [116 * f(Y) - 16, 500 * (f(X) - f(Y)), 200 * (f(Y) - f(Z))];
+}
+export function deltaE2000([L1, a1, b1], [L2, a2, b2]) {
+  const rad = Math.PI / 180, deg = 180 / Math.PI;
+  const C1 = Math.hypot(a1, b1), C2 = Math.hypot(a2, b2), Cb = (C1 + C2) / 2;
+  const G = 0.5 * (1 - Math.sqrt(Cb ** 7 / (Cb ** 7 + 25 ** 7)));
+  const a1p = (1 + G) * a1, a2p = (1 + G) * a2;
+  const C1p = Math.hypot(a1p, b1), C2p = Math.hypot(a2p, b2);
+  const h1p = (Math.atan2(b1, a1p) * deg + 360) % 360, h2p = (Math.atan2(b2, a2p) * deg + 360) % 360;
+  const dLp = L2 - L1, dCp = C2p - C1p;
+  let dh = h2p - h1p;
+  if (C1p * C2p === 0) dh = 0; else if (dh > 180) dh -= 360; else if (dh < -180) dh += 360;
+  const dHp = 2 * Math.sqrt(C1p * C2p) * Math.sin((dh / 2) * rad);
+  const Lbp = (L1 + L2) / 2, Cbp = (C1p + C2p) / 2;
+  let hbp = h1p + h2p;
+  if (C1p * C2p !== 0) hbp = Math.abs(h1p - h2p) <= 180 ? (h1p + h2p) / 2 : h1p + h2p < 360 ? (h1p + h2p + 360) / 2 : (h1p + h2p - 360) / 2;
+  const T = 1 - 0.17 * Math.cos((hbp - 30) * rad) + 0.24 * Math.cos(2 * hbp * rad) + 0.32 * Math.cos((3 * hbp + 6) * rad) - 0.2 * Math.cos((4 * hbp - 63) * rad);
+  const dth = 30 * Math.exp(-(((hbp - 275) / 25) ** 2));
+  const Rc = 2 * Math.sqrt(Cbp ** 7 / (Cbp ** 7 + 25 ** 7));
+  const Sl = 1 + (0.015 * (Lbp - 50) ** 2) / Math.sqrt(20 + (Lbp - 50) ** 2), Sc = 1 + 0.045 * Cbp, Sh = 1 + 0.015 * Cbp * T;
+  const Rt = -Math.sin(2 * dth * rad) * Rc;
+  return Math.sqrt((dLp / Sl) ** 2 + (dCp / Sc) ** 2 + (dHp / Sh) ** 2 + Rt * (dCp / Sc) * (dHp / Sh));
+}
+/** Closest Pantone in `book` ({name: hex}); null when nothing is within maxDE. */
+export function nearestPantone(hex, book, maxDE = 4) {
+  const lab = hexToLab(hex);
+  let best = null;
+  for (const [name, h] of Object.entries(book)) {
+    const d = deltaE2000(lab, hexToLab(h));
+    if (!best || d < best.de) best = { name, de: d };
+  }
+  return best && best.de <= maxDE ? best : null;
 }
 
 const ASPECT_MARK = 1.5;
@@ -210,18 +268,14 @@ export function brandColorEntries(brand) {
   return brand.colors.map((c) => ({ space: c.space, values: c.values, rgb: E.hexToRgb(c.hex) }));
 }
 
-/** Backgrounds a logo may sit on: enough contrast for the main colour and every accent. */
+/** Backgrounds a logo may sit on: the brand's background colours that keep enough contrast. */
 export function backgroundsFor(brand, a) {
   const byKey = new Map(brand.colors.map((c) => [c.key, c]));
   const logoHex = new Set(a.colorKeys.map((k) => byKey.get(k)?.hex.toUpperCase()));
   const dom = E.hexToRgb(byKey.get(a.dominantKey).hex);
   const others = a.colorKeys.slice(1).map((k) => E.hexToRgb(byKey.get(k).hex));
-  const fam = familyOf(brand, a);
-  const cands = [{ name: 'White', hex: '#FFFFFF' }, { name: 'Black', hex: '#000000' }];
-  for (const c of brand.colors) {
-    const rgb = E.hexToRgb(c.hex);
-    if (isNeutral(rgb) || fam?.accentKeys.has(c.key)) cands.push({ name: c.name, hex: c.hex.toUpperCase(), key: c.key });
-  }
+  const brandBgs = brand.colors.filter((c) => c.bg).map((c) => ({ name: c.name, hex: c.hex.toUpperCase(), key: c.key }));
+  const cands = brandBgs.length ? brandBgs : [{ name: 'White', hex: '#FFFFFF' }, { name: 'Black', hex: '#000000' }];
   const out = [];
   const seenHex = new Set();
   for (const bg of cands) {
@@ -361,7 +415,9 @@ function colorsJson(brand) {
 }
 export const cmykText = (cmyk) => cmyk ? cmyk.map((v) => +(v * 100).toFixed(2)).join(', ') : '';
 function colorsTxt(brand) {
-  const out = [`${brand.name} brand colors`, '', 'Use HEX and RGB on screens. Use CMYK (or Pantone) in print.', ''];
+  const out = [`${brand.name} brand colors`, '', 'Use HEX and RGB on screens. Use CMYK (or Pantone) in print.'];
+  if (brand.pantoneSuggested) out.push('Pantone values are the closest PANTONE+ Solid Coated matches. Confirm them against a printed Pantone guide.');
+  out.push('');
   for (const c of brand.colors) {
     out.push(c.name + (c.note ? `  (${c.note})` : ''));
     out.push(`  HEX      ${c.hex.toUpperCase()}`);
@@ -488,8 +544,8 @@ export async function buildPackage(brand, out, opts = {}) {
   await tick();
   const iconP = pick(brand, ['mark', 'logo-no-tag', 'logo'], 'primary');
   const iconS = pick(brand, ['mark', 'logo-no-tag', 'logo'], 'secondary');
-  const lightBg = brand.colors.find((c) => isNeutral(E.hexToRgb(c.hex)) && E.luminance(E.hexToRgb(c.hex)) > 0.8)?.hex || '#FFFFFF';
-  const darkBg = brand.colors.find((c) => c.key === iconP?.dominantKey)?.hex || '#000000';
+  const lightBg = lightBackground(brand);
+  const darkBg = darkBackground(brand);
   if (iconP) {
     const p = rgbPdf(brand, iconP);
     const sq = (size, inset, bg) => E.render(p, { box: [size, size], inset, background: bg ? E.hexToRgb(bg) : null });
