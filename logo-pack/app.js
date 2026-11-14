@@ -1,48 +1,23 @@
 import * as E from './engine.js';
+import * as P from './pack.js';
+import { buildGuide } from './guide.js';
 
 /* ------------------------------------------------------------------ */
 /* State                                                                */
 /* ------------------------------------------------------------------ */
 
-const VARIANTS = [
-  { id: 'full-color', label: 'Full color', bg: 'light', note: 'original colors', on: true },
-  { id: 'full-color-on-dark', label: 'Color on dark', bg: 'dark', note: 'for dark backgrounds', on: true },
-  { id: 'black', label: 'Black', bg: 'light', note: '100% K', on: true },
-  { id: 'white', label: 'White', bg: 'dark', note: 'knock-out', on: true },
-  { id: 'grayscale', label: 'Grayscale', bg: 'light', note: '', on: true },
-  { id: 'brand-color', label: 'One-color', bg: 'light', note: 'any single ink', on: false },
-];
-const WIDTHS = [250, 500, 1000, 2000, 4000];
-const PADDINGS = [{ v: 0, label: 'None' }, { v: 0.05, label: '5%' }, { v: 0.1, label: '10%' }, { v: 0.2, label: '20%' }];
-const EXTRAS = [
-  { id: 'icons', label: 'Favicon & app icons', note: 'ico, 16–512 px' },
-  { id: 'social', label: 'Social media images', note: 'profile & cover' },
-  { id: 'colors', label: 'Brand color sheet', note: 'pdf, ase, txt' },
-  { id: 'source', label: 'Original source files', note: '' },
-];
-
-const state = {
-  logos: [],
-  brand: '',
-  variants: Object.fromEntries(VARIANTS.map((v) => [v.id, v.on])),
-  widths: new Set([500, 1000, 2000]),
-  padding: 0,
-  darkBg: '#111827',
-  darkBgTouched: false,
-  brandColor: null,
-  extras: { icons: true, social: true, colors: true, source: true },
-  palette: [], // merged across logos
-  roles: {},
-  bgMode: 'auto',
-  busy: false,
-};
+const brand = { name: '', assets: [], colors: [], families: [] };
 let nextId = 1;
+let busy = false;
+const pending = [];
+const errors = [];
 
 const $ = (s) => document.querySelector(s);
 const tick = () => new Promise((r) => setTimeout(r, 0));
-const slug = (s) => String(s || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const blobUrl = (bytes, type) => URL.createObjectURL(new Blob([bytes], { type }));
+const validHex = (h) => /^#?[0-9a-f]{6}$/i.test(h.trim());
+const normHex = (h) => '#' + h.trim().replace('#', '').toUpperCase();
 
 /* ------------------------------------------------------------------ */
 /* Engine start-up                                                      */
@@ -55,7 +30,7 @@ const engineReady = E.warmUp().then(
 );
 
 /* ------------------------------------------------------------------ */
-/* Files in                                                             */
+/* Upload & scan                                                        */
 /* ------------------------------------------------------------------ */
 
 const fileInput = $('#file-input');
@@ -76,7 +51,7 @@ for (const target of [dropzone, document.body]) {
 
 function guessBrand(fileName) {
   const stem = fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
-  const word = stem.split(/\s+/).find((w) => w && !/^(logo|final|cmyk|rgb|vector|v\d+)$/i.test(w));
+  const word = stem.split(/\s+/).find((w) => w && !/^(logo|final|cmyk|rgb|vector|asset|artwork|v?\d+)$/i.test(w));
   return word ? word[0].toUpperCase() + word.slice(1) : '';
 }
 
@@ -84,506 +59,300 @@ async function addFiles(files) {
   $('#intro').hidden = true;
   $('#workspace').hidden = false;
   $('#bar').hidden = false;
-  for (const file of files) {
-    const logo = {
-      id: nextId++, fileName: file.name, label: state.logos.length ? slug(file.name.replace(/\.[^.]+$/, '')) || 'logo-' + nextId : 'logo',
-      bytes: new Uint8Array(await file.arrayBuffer()), status: 'loading', isIcon: false, previews: {}, geo: null, padCache: new Map(),
-    };
-    if (!state.brand) { state.brand = guessBrand(file.name); $('#brand').value = state.brand; }
-    state.logos.push(logo);
-    renderLogoList();
+  if (!brand.name) {
+    brand.name = files.map((f) => guessBrand(f.name)).find(Boolean) || '';
+    $('#brand').value = brand.name;
   }
-  for (const logo of state.logos.filter((l) => l.status === 'loading')) {
+  files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  for (const file of files) pending.push({ id: nextId++, fileName: file.name, file });
+  renderAssets();
+  await engineReady;
+  let done = 0;
+  const total = pending.length;
+  while (pending.length) {
+    const p = pending[0];
+    setProgress(`Reading ${p.fileName}…`, done / total);
+    await tick();
     try {
-      await engineReady;
-      await tick();
-      const loaded = await E.loadLogo(logo.bytes);
-      logo.pdf = loaded.pdf;
-      logo.analysis = E.analyze(loaded.pdf);
-      logo.thumb = blobUrl(E.render(loaded.pdf, { width: 160 }), 'image/png');
-      logo.status = 'ok';
-      mergePalette();
+      const bytes = new Uint8Array(await p.file.arrayBuffer());
+      const logo = await E.loadLogo(bytes);
+      brand.assets.push({ id: p.id, fileName: p.fileName, bytes, logo, analysis: E.analyze(logo.pdf) });
     } catch (e) {
       console.error(e);
-      logo.status = 'error';
-      logo.error = e.message || String(e);
+      errors.push({ fileName: p.fileName, message: e.message || String(e) });
     }
-    renderLogoList();
-    renderAll();
+    pending.shift();
+    done++;
   }
+  rescan();
+  setProgress(errors.length ? `${errors.length} file(s) could not be read.` : 'Check the names and colors, then download.', 0);
 }
 
-function mergePalette() {
-  const map = new Map();
-  for (const l of state.logos) if (l.analysis) for (const c of l.analysis.palette) {
-    const e = map.get(c.key);
-    if (e) e.area += c.area; else map.set(c.key, { ...c });
+const hueClose = (a, b) => (a === null && b === null) || (a !== null && b !== null && Math.min(Math.abs(a - b), 360 - Math.abs(a - b)) < 18);
+
+/** Re-run colour collection and classification, keeping the user's edits. */
+function rescan() {
+  const prevFams = brand.families.map((f) => ({ hue: f.hue, name: f.name, isMain: f.isMain, touched: f.touched }));
+  const overrides = new Map(brand.assets.filter((a) => a.override).map((a) => [a.id, a.override]));
+  brand.colors = P.collectColors(brand.assets, brand.colors);
+  brand.families = P.classify(brand.assets, brand.colors);
+  for (const f of brand.families) {
+    const old = prevFams.find((o) => o.touched && hueClose(o.hue, f.hue));
+    if (old) { f.name = old.name; f.touched = true; }
   }
-  state.palette = [...map.values()].sort((a, b) => b.area - a.area);
-  const defaults = E.defaultColorRoles(state.palette);
-  for (const c of state.palette) if (!state.roles[c.key]) state.roles[c.key] = defaults[c.key];
-  if (!state.brandColor) {
-    const vivid = state.palette.find((c) => !state.roles[c.key].knockout && E.luminance(c.rgb) < 0.8) || state.palette[0];
-    if (vivid) { state.brandColor = vivid.hex; $('#brand-color').value = vivid.hex.toLowerCase(); }
+  const mainOld = prevFams.find((o) => o.isMain && o.touched);
+  if (mainOld) {
+    brand.families.forEach((f) => { f.isMain = hueClose(f.hue, mainOld.hue); });
+    brand.families.sort((x, y) => (y.isMain - x.isMain) || (x.order - y.order));
   }
-  if (!state.darkBgTouched) {
-    const dark = state.palette.find((c) => E.luminance(c.rgb) < 0.12 && Math.max(...c.rgb) - Math.min(...c.rgb) > 0.05);
-    state.darkBg = dark ? dark.hex.toLowerCase() : '#111827';
-    $('#dark-bg').value = state.darkBg;
+  for (const a of brand.assets) {
+    const o = overrides.get(a.id);
+    if (!o) continue;
+    if (o.type) a.type = o.type;
+    if (o.role) a.role = o.role;
+    if (o.famHue !== undefined) { const f = brand.families.find((x) => hueClose(x.hue, o.famHue)); if (f) a.familyId = f.id; }
+    a.override = o;
   }
-  for (const l of state.logos) l.geo = null;
+  renderAll();
 }
 
 /* ------------------------------------------------------------------ */
-/* Settings UI                                                          */
+/* Rendering                                                            */
 /* ------------------------------------------------------------------ */
 
-function renderLogoList() {
-  const ul = $('#logo-list');
-  ul.innerHTML = state.logos.map((l) => `
-    <li class="logo-item ${l.status}" data-id="${l.id}">
-      <div class="logo-thumb">${l.thumb ? `<img src="${l.thumb}" alt="">` : ''}</div>
-      <div class="logo-meta">
-        <input type="text" value="${esc(l.label)}" data-act="label" aria-label="Layout name for ${esc(l.fileName)}">
-        <small>${l.status === 'error' ? esc(l.error) : l.status === 'loading' ? 'Reading ' + esc(l.fileName) + '…' : esc(l.fileName)}
-        ${state.logos.length > 1 && l.status === 'ok' ? `<label><input type="radio" name="icon-src" data-act="icon" ${iconLogo() === l ? 'checked' : ''}> use for icons</label>` : ''}</small>
+const neutralsBy = (dir) => brand.colors.filter((c) => P.isNeutral(E.hexToRgb(c.hex)))
+  .sort((a, b) => dir * (E.luminance(E.hexToRgb(a.hex)) - E.luminance(E.hexToRgb(b.hex))));
+function darkBg() { const c = neutralsBy(1)[0]; return c && E.luminance(E.hexToRgb(c.hex)) < 0.3 ? c.hex : '#18181B'; }
+function lightBg() { const c = neutralsBy(-1)[0]; return c && E.luminance(E.hexToRgb(c.hex)) > 0.75 ? c.hex : '#FFFFFF'; }
+
+const colorSub = (c) => `${c.cmyk ? `CMYK ${P.cmykText(c.cmyk)} <span class="exact">from file</span>` : `${c.space} ${c.values.map((v) => +(v * 100).toFixed(2)).join(', ')}`} · RGB ${E.hexToRgb(c.hex).map((v) => Math.round(v * 255)).join(' ')}`;
+
+function renderColors() {
+  $('#colors').innerHTML = brand.colors.map((c) => `
+    <div class="color-row" data-key="${esc(c.key)}">
+      <label class="color-sw" style="background:${c.hex}" title="Pick the official color">
+        <input type="color" value="${c.hex.toLowerCase()}" data-act="picker" aria-label="${esc(c.name)} color">
+      </label>
+      <div class="color-info">
+        <div class="color-fields">
+          <input type="text" value="${esc(c.name)}" data-act="name" aria-label="Color name" class="in-name">
+          <input type="text" value="${c.hex.toUpperCase()}" data-act="hex" aria-label="${esc(c.name)} HEX" class="in-hex" maxlength="7" spellcheck="false">
+        </div>
+        <div class="sub">${colorSub(c)}</div>
+        <input type="text" value="${esc(c.pantone)}" data-act="pantone" placeholder="Pantone (optional)" aria-label="${esc(c.name)} Pantone" class="in-pms">
       </div>
-      <button class="icon-btn" data-act="remove" type="button" aria-label="Remove ${esc(l.fileName)}">×</button>
-    </li>`).join('');
+    </div>`).join('') || '<p class="hint">Colors appear after your files are read.</p>';
 }
 
-$('#logo-list').addEventListener('input', (e) => {
-  const li = e.target.closest('.logo-item');
-  const logo = state.logos.find((l) => l.id === +li.dataset.id);
-  if (e.target.dataset.act === 'label') { logo.label = e.target.value; updateCount(); renderPreviews(); }
+let colorTimer;
+$('#colors').addEventListener('input', (e) => {
+  const row = e.target.closest('.color-row');
+  const c = brand.colors.find((x) => x.key === row.dataset.key);
+  const act = e.target.dataset.act;
+  if (act === 'name') { c.name = e.target.value; c.named = true; clearTimeout(colorTimer); colorTimer = setTimeout(renderFamilies, 300); }
+  if (act === 'pantone') c.pantone = e.target.value;
+  if (act === 'hex' && validHex(e.target.value)) { c.hex = normHex(e.target.value); row.querySelector('[data-act=picker]').value = c.hex.toLowerCase(); }
+  if (act === 'picker') { c.hex = e.target.value.toUpperCase(); row.querySelector('[data-act=hex]').value = c.hex; }
+  if (act === 'hex' || act === 'picker') {
+    row.querySelector('.color-sw').style.background = c.hex;
+    row.querySelector('.sub').innerHTML = colorSub(c);
+    clearTimeout(colorTimer);
+    colorTimer = setTimeout(() => { renderFamilies(); renderAssets(); }, 300);
+  }
 });
-$('#logo-list').addEventListener('change', (e) => {
-  const li = e.target.closest('.logo-item');
-  const logo = state.logos.find((l) => l.id === +li.dataset.id);
-  if (e.target.dataset.act === 'icon') { state.logos.forEach((l) => { l.isIcon = l === logo; }); }
+
+function renderFamilies() {
+  const byKey = new Map(brand.colors.map((c) => [c.key, c]));
+  $('#families-card').hidden = brand.families.length < 2;
+  $('#families').innerHTML = brand.families.map((f) => `
+    <div class="family-row" data-id="${f.id}">
+      <span class="swatches">${[...f.accentKeys].map((k) => `<i style="background:${byKey.get(k)?.hex}" title="${esc(byKey.get(k)?.name)}"></i>`).join('') || '<i style="background:#ccc"></i>'}</span>
+      <input type="text" value="${esc(f.name)}" placeholder="${f.isMain ? 'Main brand: leave empty' : 'e.g. Strategy'}" data-act="fname" aria-label="Family name">
+      <label class="radio"><input type="radio" name="main-fam" ${f.isMain ? 'checked' : ''} data-act="main"> Main</label>
+    </div>`).join('');
+}
+$('#families').addEventListener('input', (e) => {
+  const f = brand.families.find((x) => x.id === e.target.closest('.family-row').dataset.id);
+  if (e.target.dataset.act === 'fname') { f.name = e.target.value.trim(); f.touched = true; renderAssetNames(); }
 });
-$('#logo-list').addEventListener('click', (e) => {
-  if (e.target.dataset.act !== 'remove') return;
-  const id = +e.target.closest('.logo-item').dataset.id;
-  state.logos = state.logos.filter((l) => l.id !== id);
-  if (!state.logos.length) { location.reload(); return; }
-  mergePalette();
-  renderLogoList();
+$('#families').addEventListener('change', (e) => {
+  if (e.target.dataset.act !== 'main') return;
+  const f = brand.families.find((x) => x.id === e.target.closest('.family-row').dataset.id);
+  brand.families.forEach((x) => { x.isMain = x === f; x.touched = true; });
+  brand.families.sort((x, y) => (y.isMain - x.isMain) || (x.order - y.order));
   renderAll();
 });
 
-$('#brand').addEventListener('input', (e) => { state.brand = e.target.value; });
+$('#brand').addEventListener('input', (e) => { brand.name = e.target.value; renderAssetNames(); });
 
-function renderVariants() {
-  $('#variant-list').innerHTML = VARIANTS.map((v) => `
-    <label class="check"><input type="checkbox" data-v="${v.id}" ${state.variants[v.id] ? 'checked' : ''}>
-      <span class="sw" style="${swatchStyle(v.id)}"></span>${v.label}<small>${v.note}</small></label>`).join('');
-  $('#brand-color-row').hidden = !state.variants['brand-color'];
-}
-function swatchStyle(id) {
-  switch (id) {
-    case 'full-color': return `background: linear-gradient(135deg, ${(state.palette[0]?.hex) || '#4338ca'} 50%, ${(state.palette[1]?.hex) || '#f59e0b'} 50%)`;
-    case 'full-color-on-dark': return `background: linear-gradient(135deg, ${state.darkBg} 50%, ${(state.palette[0]?.hex) || '#4338ca'} 50%)`;
-    case 'black': return 'background:#000';
-    case 'white': return 'background:#fff';
-    case 'grayscale': return 'background: linear-gradient(135deg,#333 50%,#aaa 50%)';
-    default: return `background:${state.brandColor || '#4338ca'}`;
+const thumbCache = new Map();
+function thumbFor(a) {
+  const pdf = P.rgbPdf(brand, a);
+  if (thumbCache.get(a.id)?.pdf !== pdf) {
+    const w = a.aspect >= 1.5 ? 560 : 240;
+    thumbCache.set(a.id, { pdf, url: blobUrl(E.render(pdf, { width: w }), 'image/png') });
   }
+  return thumbCache.get(a.id).url;
 }
-$('#variant-list').addEventListener('change', (e) => {
-  state.variants[e.target.dataset.v] = e.target.checked;
-  renderVariants();
-  renderPreviews();
-});
-$('#brand-color').addEventListener('input', (e) => { state.brandColor = e.target.value.toUpperCase(); renderVariants(); schedulePreviews(['brand-color']); });
 
-function renderPalette() {
-  $('#palette').innerHTML = state.palette.map((c, i) => {
-    const r = state.roles[c.key];
-    const name = c.spot ? esc(c.spot) : `Color ${i + 1}`;
-    return `<div class="color-row" data-key="${esc(c.key)}">
-      <button class="color-sw" type="button" style="background:${c.hex}" data-act="ink" title="Use as one-color ink" aria-label="Use ${c.hex} as one-color ink"></button>
-      <div class="color-info">
-        <div><code>${c.hex}</code> <span class="sub">${name}</span></div>
-        <div class="sub">CMYK ${c.cmyk.map((v) => Math.round(v * 100)).join(' ')}${c.cmykExact ? '' : ' (converted)'} · RGB ${c.rgb.map((v) => Math.round(v * 255)).join(' ')}</div>
-        <div class="color-opts">
-          <label><input type="checkbox" data-act="knockout" ${r.knockout ? 'checked' : ''}> Cut out in one-color</label>
-          <label><input type="checkbox" data-act="onDark" ${r.onDark === 'white' ? 'checked' : ''}> White on dark</label>
+function renderAssets() {
+  P.assignNames(brand);
+  const groups = brand.families.map((f) => ({ f, list: brand.assets.filter((a) => a.familyId === f.id) })).filter((g) => g.list.length);
+  const order = (a) => P.TYPES.findIndex((t) => t.id === a.type) * 2 + (a.role === 'primary' ? 0 : 1);
+  const dark = darkBg(), light = lightBg();
+  const fOpts = (a) => brand.families.map((f) => `<option value="${f.id}" ${a.familyId === f.id ? 'selected' : ''}>${esc(P.familyTitle(brand, f) || 'Main brand')}</option>`).join('');
+  const tOpts = (a) => P.TYPES.map((t) => `<option value="${t.id}" ${a.type === t.id ? 'selected' : ''}>${t.label}</option>`).join('');
+  const rOpts = (a) => P.ROLES.map((r) => `<option value="${r.id}" ${a.role === r.id ? 'selected' : ''}>${r.label} (${r.id === 'primary' ? 'dark' : 'light'})</option>`).join('');
+  const tile = (a) => `
+    <figure class="asset" data-id="${a.id}">
+      <div class="stage" style="background:${a.role === 'primary' ? light : dark}"><img src="${thumbFor(a)}" alt="${esc(a.fileName)}"></div>
+      <figcaption>
+        <code class="fname" title="File name">${esc(a.base)}</code>
+        <div class="selects">
+          ${brand.families.length > 1 ? `<select data-act="family" aria-label="Family">${fOpts(a)}</select>` : ''}
+          <select data-act="type" aria-label="Version">${tOpts(a)}</select>
+          <select data-act="role" aria-label="Role">${rOpts(a)}</select>
         </div>
-      </div></div>`;
-  }).join('') || '<p class="hint">Upload a logo to see its colors.</p>';
-}
-$('#palette').addEventListener('change', (e) => {
-  const key = e.target.closest('.color-row').dataset.key;
-  const act = e.target.dataset.act;
-  if (act === 'knockout') { state.roles[key].knockout = e.target.checked; state.logos.forEach((l) => { l.geo = null; }); schedulePreviews(['black', 'white', 'brand-color']); }
-  if (act === 'onDark') { state.roles[key].onDark = e.target.checked ? 'white' : 'keep'; schedulePreviews(['full-color-on-dark']); }
-});
-$('#palette').addEventListener('click', (e) => {
-  if (e.target.dataset.act !== 'ink') return;
-  const c = state.palette.find((p) => p.key === e.target.closest('.color-row').dataset.key);
-  state.brandColor = c.hex;
-  $('#brand-color').value = c.hex.toLowerCase();
-  state.variants['brand-color'] = true;
-  renderVariants();
-  renderPreviews();
-});
-
-function renderWidths() {
-  const all = [...new Set([...WIDTHS, ...state.widths])].sort((a, b) => a - b);
-  $('#widths').innerHTML = all.map((w) => `<label class="chip"><input type="checkbox" value="${w}" ${state.widths.has(w) ? 'checked' : ''}><span>${w} px</span></label>`).join('');
-}
-$('#widths').addEventListener('change', (e) => { const w = +e.target.value; if (e.target.checked) state.widths.add(w); else state.widths.delete(w); updateCount(); });
-$('#add-width').addEventListener('click', () => {
-  const w = Math.round(+$('#custom-width').value);
-  if (w >= 16 && w <= 10000) { state.widths.add(w); $('#custom-width').value = ''; renderWidths(); updateCount(); }
-});
-$('#custom-width').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#add-width').click(); });
-
-function renderSegmented(el, name, options, current, onChange) {
-  el.innerHTML = options.map((o) => `<label><input type="radio" name="${name}" value="${o.v}" ${String(o.v) === String(current) ? 'checked' : ''}><span>${o.label}</span></label>`).join('');
-  el.onchange = (e) => onChange(e.target.value);
-}
-
-$('#dark-bg').addEventListener('input', (e) => {
-  state.darkBg = e.target.value;
-  state.darkBgTouched = true;
-  document.documentElement.style.setProperty('--dark-bg', state.darkBg);
-  renderVariants();
-});
-
-function renderExtras() {
-  const icon = readyLogos().length ? iconLogo() : null;
-  const tip = icon && aspect(icon) > 1.6
-    ? '<p class="hint">Tip: add an icon-only version of the logo (just the symbol) for sharper favicons and profile pictures.</p>' : '';
-  $('#extras').innerHTML = EXTRAS.map((x) => `<label class="check"><input type="checkbox" data-x="${x.id}" ${state.extras[x.id] ? 'checked' : ''}>${x.label}<small>${x.note}</small></label>`).join('') + tip;
-}
-$('#extras').addEventListener('change', (e) => { state.extras[e.target.dataset.x] = e.target.checked; updateCount(); });
-
-/* ------------------------------------------------------------------ */
-/* Variant generation                                                   */
-/* ------------------------------------------------------------------ */
-
-const readyLogos = () => state.logos.filter((l) => l.status === 'ok');
-const aspect = (l) => Math.max(l.analysis.width, l.analysis.height) / Math.min(l.analysis.width, l.analysis.height);
-// Icons come from the logo marked "use for icons", else the most square one.
-const iconLogo = () => readyLogos().find((l) => l.isIcon) || [...readyLogos()].sort((a, b) => aspect(a) - aspect(b))[0];
-const activeVariants = () => VARIANTS.filter((v) => state.variants[v.id]);
-
-function padFor(logo) {
-  return state.padding * Math.max(logo.analysis.width, logo.analysis.height);
-}
-function paddedPdf(logo) {
-  const pad = padFor(logo);
-  if (!logo.padCache.has(pad)) logo.padCache.set(pad, E.padPdf(logo.pdf, pad));
-  return logo.padCache.get(pad);
-}
-function geometry(logo) {
-  if (!logo.geo) logo.geo = E.buildOneColorGeometry(logo.analysis, state.roles);
-  return logo.geo;
-}
-function inkFor(id) {
-  if (id === 'black') return { rgb: [0, 0, 0], cmyk: [0, 0, 0, 1] };
-  if (id === 'white') return { rgb: [1, 1, 1], cmyk: [0, 0, 0, 0] };
-  const hex = state.brandColor || '#000000';
-  const match = state.palette.find((c) => c.hex === hex.toUpperCase());
-  const rgb = match ? match.rgb : E.hexToRgb(hex);
-  return { rgb, cmyk: match ? match.cmyk : E.rgbToCmyk(rgb) };
-}
-
-/** Returns { screen, print } PDFs for one logo + version. print is CMYK/Gray. */
-async function variantPdfs(logo, id, withPrint) {
-  const base = paddedPdf(logo);
-  const pad = padFor(logo);
-  switch (id) {
-    case 'full-color':
-      return { screen: base, print: withPrint ? await E.toCmykPdf(base) : null };
-    case 'full-color-on-dark': {
-      const screen = E.reversedPdf(base, state.roles, state.palette);
-      return { screen, print: withPrint ? await E.toCmykPdf(screen) : null };
-    }
-    case 'grayscale': {
-      const gray = await E.toGrayPdf(base);
-      return { screen: gray, print: gray };
-    }
-    default: {
-      const geo = geometry(logo);
-      const ink = inkFor(id);
-      return {
-        screen: E.oneColorPdf(logo.analysis, geo, ink, 'rgb', pad),
-        print: withPrint ? E.oneColorPdf(logo.analysis, geo, ink, 'cmyk', pad) : null,
-      };
-    }
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* Previews                                                             */
-/* ------------------------------------------------------------------ */
-
-renderSegmented($('#bg-mode'), 'bg-mode', [{ v: 'auto', label: 'Auto' }, { v: 'light', label: 'Light' }, { v: 'dark', label: 'Dark' }, { v: 'checker', label: 'Transparent' }], state.bgMode, (v) => {
-  state.bgMode = v;
-  document.querySelectorAll('.stage').forEach((s) => { s.className = 'stage ' + stageBg(s.dataset.v); });
-});
-renderSegmented($('#padding'), 'padding', PADDINGS, state.padding, (v) => { state.padding = +v; state.logos.forEach((l) => { l.previews = {}; }); renderPreviews(); });
-
-function stageBg(id) {
-  if (state.bgMode !== 'auto') return state.bgMode;
-  return VARIANTS.find((v) => v.id === id).bg;
-}
-
-let previewTimer;
-function schedulePreviews(ids) {
-  for (const l of state.logos) for (const id of ids) delete l.previews[id];
-  clearTimeout(previewTimer);
-  previewTimer = setTimeout(renderPreviews, 150);
-}
-
-let previewRun = 0;
-async function renderPreviews() {
-  const run = ++previewRun;
-  const grid = $('#preview-grid');
-  const logos = readyLogos();
-  const notes = new Set();
-  logos.forEach((l) => l.analysis.notes.forEach((n) => notes.add(n)));
-  $('#notes').hidden = !notes.size;
-  $('#notes').innerHTML = notes.size ? '<ul>' + [...notes].map((n) => `<li>${esc(n)}</li>`).join('') + '</ul>' : '';
-  grid.innerHTML = logos.map((l) => `
-    <div class="logo-block">
-      ${logos.length > 1 ? `<h3>${esc(l.label || 'logo')}</h3>` : ''}
-      <div class="grid">${activeVariants().map((v) => `
-        <figure class="tile" style="margin:0">
-          <div class="stage ${stageBg(v.id)}" data-v="${v.id}" data-logo="${l.id}">${l.previews[v.id] ? `<img src="${l.previews[v.id]}" alt="${esc(v.label)} version">` : '<div class="spinner"></div>'}</div>
-          <figcaption class="tile-cap"><span>${v.label}</span><small>${v.note}</small></figcaption>
-        </figure>`).join('')}</div>
-    </div>`).join('');
+        <small>${esc(a.fileName)}</small>
+      </figcaption>
+    </figure>`;
+  const loading = pending.map((p) => `<figure class="asset loading"><div class="stage checker"><div class="spinner"></div></div><figcaption><small>${esc(p.fileName)}</small></figcaption></figure>`).join('');
+  const errs = errors.map((e) => `<div class="notes err-note"><strong>${esc(e.fileName)}</strong>: ${esc(e.message)}</div>`).join('');
+  $('#assets').innerHTML = errs + groups.map((g) => `
+      <section class="logo-block">
+        ${groups.length > 1 ? `<h3>${esc(P.familyTitle(brand, g.f) || 'Main brand')}</h3>` : ''}
+        <div class="asset-grid">${g.list.sort((x, y) => order(x) - order(y)).map(tile).join('')}</div>
+      </section>`).join('') + (loading ? `<div class="asset-grid">${loading}</div>` : '');
+  $('#asset-count').textContent = brand.assets.length ? `${brand.assets.length}` : '';
   updateCount();
-  for (const l of logos) {
-    for (const v of activeVariants()) {
-      if (l.previews[v.id]) continue;
-      await tick();
-      if (run !== previewRun) return;
-      try {
-        const { screen } = await variantPdfs(l, v.id, false);
-        if (l.geo?.problems?.length) l.geo.problems.forEach((p) => notes.add(p));
-        l.previews[v.id] = blobUrl(E.render(screen, { width: 640 }), 'image/png');
-      } catch (e) {
-        console.error(e);
-        continue;
-      }
-      if (run !== previewRun) return;
-      const stage = grid.querySelector(`.stage[data-v="${v.id}"][data-logo="${l.id}"]`);
-      if (stage) stage.innerHTML = `<img src="${l.previews[v.id]}" alt="${esc(v.label)} version">`;
-    }
-  }
 }
+
+function renderAssetNames() {
+  P.assignNames(brand);
+  for (const el of document.querySelectorAll('.asset[data-id]')) {
+    const a = brand.assets.find((x) => x.id === +el.dataset.id);
+    el.querySelector('.fname').textContent = a.base;
+  }
+  for (const o of document.querySelectorAll('select[data-act=family] option')) {
+    o.textContent = P.familyTitle(brand, brand.families.find((x) => x.id === o.value)) || 'Main brand';
+  }
+  for (const h of document.querySelectorAll('.logo-block h3')) void h;
+}
+
+$('#assets').addEventListener('change', (e) => {
+  const el = e.target.closest('.asset');
+  if (!el) return;
+  const a = brand.assets.find((x) => x.id === +el.dataset.id);
+  const act = e.target.dataset.act;
+  a.override = a.override || {};
+  if (act === 'family') { a.familyId = e.target.value; a.override.famHue = brand.families.find((f) => f.id === a.familyId)?.hue; }
+  if (act === 'type') { a.type = e.target.value; a.override.type = a.type; }
+  if (act === 'role') { a.role = e.target.value; a.override.role = a.role; }
+  renderAssets();
+});
 
 function renderAll() {
-  document.documentElement.style.setProperty('--dark-bg', state.darkBg);
-  renderVariants();
-  renderPalette();
-  renderWidths();
-  renderExtras();
-  renderPreviews();
+  renderColors();
+  renderFamilies();
+  renderAssets();
 }
 
 /* ------------------------------------------------------------------ */
-/* File count & pack                                                    */
+/* Guide preview & package                                              */
 /* ------------------------------------------------------------------ */
 
-function plan() {
-  const logos = readyLogos();
-  const vs = activeVariants();
-  const widths = [...state.widths].sort((a, b) => a - b);
-  let n = logos.length * vs.length * (3 + widths.length * 2); // pdf, eps, svg + png & jpg per width
-  if (state.extras.icons && logos.length) n += 7;
-  if (state.extras.social && logos.length) n += 5;
-  if (state.extras.colors && state.palette.length) n += 3;
-  if (state.extras.source) n += logos.length;
-  n += 1; // README
-  return { logos, vs, widths, n };
+function setProgress(text, frac) {
+  if (text) $('#progress-text').textContent = text;
+  $('#progress-fill').style.width = `${Math.round((frac || 0) * 100)}%`;
+}
+function estimate() {
+  let n = 0;
+  for (const a of brand.assets) n += 3 + P.PNG_SIZES.length * 2 + P.backgroundsFor(brand, a).length;
+  return n + 9 + P.SOCIAL.length * 2 + 4 + 4 + 1;
 }
 function updateCount() {
-  const { n, logos } = plan();
-  $('#file-count').textContent = logos.length ? `${n} files` : 'No logos yet';
-  $('#download').disabled = !logos.length || state.busy;
+  const ready = brand.assets.length && !pending.length;
+  $('#file-count').textContent = ready ? `${brand.assets.length} logos · about ${estimate()} files` : pending.length ? `Reading ${pending.length} file(s)…` : 'No logos yet';
+  $('#download').disabled = !ready || busy;
+  $('#preview-guide').disabled = !ready || busy;
 }
 
-function progress(done, total, text) {
-  $('#progress-fill').style.width = total ? `${Math.round((done / total) * 100)}%` : '0';
-  if (text) $('#progress-text').textContent = text;
+function checkReady() {
+  if (!brand.name.trim()) { setProgress('Enter the company name first.', 0); $('#brand').focus(); return false; }
+  return true;
 }
 
-$('#download').addEventListener('click', buildPack);
+let lastGuide = null;
+$('#preview-guide').addEventListener('click', async () => {
+  if (busy || !checkReady()) return;
+  busy = true; updateCount();
+  setProgress('Building the guidelines…', 0.2);
+  await tick();
+  try {
+    lastGuide = buildGuide(brand);
+    const doc = E.mupdf.Document.openDocument(lastGuide, 'application/pdf');
+    const n = doc.countPages();
+    const urls = [];
+    for (let i = 0; i < n; i++) {
+      const pix = doc.loadPage(i).toPixmap(E.mupdf.Matrix.scale(0.25, 0.25), E.mupdf.ColorSpace.DeviceRGB, false);
+      urls.push(blobUrl(pix.asPNG(), 'image/png'));
+      if (i % 4 === 3) { setProgress(`Rendering page ${i + 1} of ${n}…`, 0.2 + 0.8 * (i / n)); await tick(); }
+    }
+    $('#guide-pages').innerHTML = urls.map((u, i) => `<a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="Guide page ${i + 1}" loading="lazy"></a>`).join('');
+    $('#guide-section').hidden = false;
+    $('#guide-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setProgress(`Guidelines ready: ${n} pages.`, 1);
+  } catch (e) {
+    console.error(e);
+    setProgress('Could not build the guide: ' + (e.message || e), 0);
+  } finally { busy = false; updateCount(); }
+});
 
-async function buildPack() {
-  if (state.busy) return;
-  const { logos, vs, widths } = plan();
-  if (!logos.length) return;
-  state.busy = true;
-  updateCount();
-  const btn = $('#download');
-  btn.textContent = 'Building…';
+$('#guide-download').addEventListener('click', () => {
+  if (lastGuide) save(new Blob([lastGuide], { type: 'application/pdf' }), P.layout(brand).guideName);
+});
+
+function save(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+}
+
+async function webp(png) {
+  try {
+    const bmp = await createImageBitmap(new Blob([png], { type: 'image/png' }));
+    const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(bmp.width, bmp.height) : Object.assign(document.createElement('canvas'), { width: bmp.width, height: bmp.height });
+    c.getContext('2d').drawImage(bmp, 0, 0);
+    const blob = c.convertToBlob ? await c.convertToBlob({ type: 'image/webp', quality: 1 }) : await new Promise((r) => c.toBlob(r, 'image/webp', 1));
+    return blob && blob.type === 'image/webp' ? new Uint8Array(await blob.arrayBuffer()) : null;
+  } catch { return null; }
+}
+
+$('#download').addEventListener('click', async () => {
+  if (busy || !checkReady()) return;
+  busy = true; updateCount();
   const t0 = performance.now();
   try {
-    const brand = state.brand.trim() || 'Brand';
-    const b = slug(brand) || 'brand';
-    const root = `${brand} Logo Pack`;
     const zip = new JSZip();
-    const dir = zip.folder(root);
-    const dark = E.hexToRgb(state.darkBg);
-    const steps = logos.length * vs.length + (state.extras.icons ? 1 : 0) + (state.extras.social ? 1 : 0) + 2;
-    let step = 0;
-
-    for (const logo of logos) {
-      const layout = slug(logo.label) || 'logo';
-      for (const v of vs) {
-        progress(step, steps, `${logo.label || 'Logo'} · ${v.label}`);
-        await tick();
-        const name = `${b}_${layout}_${v.id}`;
-        const { screen, print } = await variantPdfs(logo, v.id, true);
-        dir.file(`Print (CMYK)/PDF/${name}.pdf`, print);
-        dir.file(`Print (CMYK)/EPS/${name}.eps`, await E.toEps(print));
-        dir.file(`Digital (RGB)/SVG/${name}.svg`, E.toSvg(screen));
-        const bg = v.bg === 'dark' ? dark : [1, 1, 1];
-        for (const w of widths) {
-          dir.file(`Digital (RGB)/PNG/${v.label}/${name}_${w}px.png`, E.render(screen, { width: w }));
-          dir.file(`Digital (RGB)/JPG/${v.label}/${name}_${w}px.jpg`, E.render(screen, { width: w, background: bg, format: 'jpg' }));
-          await tick();
-        }
-        step++;
-      }
-      if (state.extras.source) dir.file(`Source/${logo.fileName}`, logo.bytes);
-    }
-
-    const icon = iconLogo();
-    if (state.extras.icons && icon) {
-      progress(step, steps, 'Favicon & app icons');
-      await tick();
-      const base = icon.pdf; // tight crop: icons get their own margins
-      const sq = (size, inset, background = null) => E.render(base, { box: [size, size], inset, background });
-      const f = 'Favicon & App Icons/';
-      const ico = [16, 32, 48].map((size) => ({ size, bytes: sq(size, 0.02) }));
-      dir.file(f + 'favicon.ico', E.buildIco(ico));
-      dir.file(f + 'favicon-16x16.png', ico[0].bytes);
-      dir.file(f + 'favicon-32x32.png', ico[1].bytes);
-      dir.file(f + 'apple-touch-icon.png', sq(180, 0.12, [1, 1, 1]));
-      dir.file(f + 'android-chrome-192x192.png', sq(192, 0.08));
-      dir.file(f + 'android-chrome-512x512.png', sq(512, 0.08));
-      dir.file(f + 'site.webmanifest', JSON.stringify({
-        name: brand, short_name: brand,
-        icons: [{ src: '/android-chrome-192x192.png', sizes: '192x192', type: 'image/png' }, { src: '/android-chrome-512x512.png', sizes: '512x512', type: 'image/png' }],
-        theme_color: state.brandColor || '#ffffff', background_color: '#ffffff', display: 'standalone',
-      }, null, 2));
-      step++;
-    }
-
-    if (state.extras.social && icon) {
-      progress(step, steps, 'Social media images');
-      await tick();
-      const light = icon.pdf;
-      const darkPdf = E.reversedPdf(light, state.roles, state.palette);
-      const whitePdf = E.oneColorPdf(icon.analysis, geometry(icon), inkFor('white'), 'rgb', 0);
-      const hasDarkMapping = state.palette.some((c) => state.roles[c.key].onDark === 'white');
-      const onDark = hasDarkMapping ? darkPdf : whitePdf;
-      const s = 'Social Media/';
-      dir.file(s + `${b}_profile_light_1080x1080.png`, E.render(light, { box: [1080, 1080], inset: 0.18, background: [1, 1, 1] }));
-      dir.file(s + `${b}_profile_dark_1080x1080.png`, E.render(onDark, { box: [1080, 1080], inset: 0.18, background: dark }));
-      dir.file(s + `${b}_profile_light_400x400.png`, E.render(light, { box: [400, 400], inset: 0.18, background: [1, 1, 1] }));
-      const wide = logos[0];
-      const wideLight = wide.pdf;
-      dir.file(s + `${b}_cover_light_1500x500.png`, E.render(wideLight, { box: [1500, 500], inset: 0.28, background: [1, 1, 1] }));
-      dir.file(s + `${b}_cover_dark_1500x500.png`, E.render(hasDarkMapping ? E.reversedPdf(wideLight, state.roles, state.palette) : E.oneColorPdf(wide.analysis, geometry(wide), inkFor('white'), 'rgb', 0), { box: [1500, 500], inset: 0.28, background: dark }));
-      step++;
-    }
-
-    if (state.extras.colors && state.palette.length) {
-      progress(step, steps, 'Brand colors');
-      const colors = state.palette.map((c, i) => ({ ...c, name: c.spot || `${brand} Color ${i + 1}` }));
-      dir.file(`Brand Colors/${b}_colors.pdf`, E.colorSheetPdf(brand, colors));
-      dir.file(`Brand Colors/${b}_colors.ase`, E.buildAse(colors.map((c) => ({
-        name: `${c.name} ${c.hex}`, model: c.cmykExact ? 'CMYK' : 'RGB', values: c.cmykExact ? c.cmyk : c.rgb, spot: !!c.spot,
-      }))));
-      dir.file(`Brand Colors/${b}_colors.txt`, colorsText(brand, colors));
-    }
-    step++;
-
-    dir.file('README.txt', readme(brand, b, logos, vs, widths));
-    progress(step, steps, 'Compressing…');
-    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } }, (m) => {
-      progress(steps - 1 + m.percent / 100, steps, `Compressing… ${Math.round(m.percent)}%`);
+    let count = 0;
+    const L = await P.buildPackage(brand, (path, data) => { if (data) { zip.file(path, data); count++; } }, {
+      webp,
+      progress: (t, f) => setProgress(`Creating ${t}…`, f * 0.85),
+      guide: async () => (lastGuide = buildGuide(brand)),
     });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${b}-logo-pack.zip`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-    progress(steps, steps, `Done in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${(blob.size / 1048576).toFixed(1)} MB`);
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+      (m) => setProgress(`Compressing… ${Math.round(m.percent)}%`, 0.85 + 0.15 * (m.percent / 100)));
+    save(blob, `${L.root}.zip`);
+    setProgress(`Done: ${count} files, ${(blob.size / 1048576).toFixed(1)} MB in ${((performance.now() - t0) / 1000).toFixed(0)}s.`, 1);
     window.__lastPack = blob;
   } catch (e) {
     console.error(e);
-    progress(0, 1, 'Something went wrong: ' + (e.message || e));
-  } finally {
-    state.busy = false;
-    btn.textContent = 'Download logo pack';
-    updateCount();
-  }
-}
+    setProgress('Something went wrong: ' + (e.message || e), 0);
+  } finally { busy = false; updateCount(); }
+});
 
-function colorsText(brand, colors) {
-  const lines = [`${brand} brand colors`, ''];
-  for (const c of colors) {
-    lines.push(c.name);
-    lines.push(`  HEX   ${c.hex}`);
-    lines.push(`  RGB   ${c.rgb.map((v) => Math.round(v * 255)).join(', ')}`);
-    lines.push(`  CMYK  ${c.cmyk.map((v) => Math.round(v * 100)).join(', ')}${c.cmykExact ? '' : '  (converted from RGB, check with your printer)'}`);
-    if (c.spot) lines.push(`  Spot  ${c.spot}`);
-    lines.push('');
-  }
-  return lines.join('\r\n');
-}
-
-function readme(brand, b, logos, vs, widths) {
-  return [
-    `${brand} logo pack`,
-    '='.repeat(brand.length + 10),
-    '',
-    'WHICH FILE SHOULD I USE?',
-    '',
-    'Print (CMYK)/',
-    '  EPS and PDF vector files in CMYK. Send these to printers, sign makers and',
-    '  anyone producing physical items. They scale to any size without losing quality.',
-    '',
-    'Digital (RGB)/',
-    '  SVG  - vector for websites and apps. Sharp at every size.',
-    '  PNG  - transparent background. Use in presentations, documents and on the web.',
-    '  JPG  - solid background. Use where transparency is not supported (some email',
-    '         clients, office tools). Dark versions sit on the brand\'s dark color.',
-    `  Widths included: ${widths.map((w) => w + 'px').join(', ')}.`,
-    '',
-    'Favicon & App Icons/   Drop these in the root of a website.',
-    'Social Media/          Profile pictures and cover images.',
-    'Brand Colors/          HEX, RGB and CMYK values. The .ase file imports into',
-    '                       Adobe Illustrator, InDesign and Photoshop swatches.',
-    '',
-    'VERSIONS',
-    '',
-    ...vs.map((v) => `  ${v.id.padEnd(20)} ${{
-      'full-color': 'Primary logo. Use on white or light backgrounds.',
-      'full-color-on-dark': 'Color logo adjusted for dark backgrounds.',
-      black: 'One-color black. For single-color print, faxes, engraving.',
-      white: 'One-color white. For dark backgrounds and photos.',
-      grayscale: 'Shades of gray. For black-and-white print.',
-      'brand-color': 'Single brand color.',
-    }[v.id]}`),
-    '',
-    logos.length > 1 ? 'LAYOUTS\n\n' + logos.map((l) => '  ' + (slug(l.label) || 'logo')).join('\n') + '\n' : '',
-    `File names follow: ${b}_<layout>_<version>[_<width>px].<ext>`,
-    '',
-  ].join('\r\n');
-}
-
-renderExtras();
 updateCount();

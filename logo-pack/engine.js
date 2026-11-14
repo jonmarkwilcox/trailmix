@@ -97,9 +97,21 @@ function sniff(bytes) {
   return null;
 }
 
+/** The PostScript part of an EPS (skips a DOS binary header with TIFF/WMF preview). */
+function postscriptText(bytes) {
+  if (bytes[0] === 0xc5 && bytes[1] === 0xd0 && bytes[2] === 0xd3 && bytes[3] === 0xc6) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const off = dv.getUint32(4, true), len = dv.getUint32(8, true);
+    return latin1(bytes.subarray(off, off + len));
+  }
+  return latin1(bytes);
+}
+
 /**
- * Turn an EPS / PS / AI / PDF into a tightly cropped, single-page PDF with all
- * text converted to outlines. Returns { pdf, width, height } (points).
+ * Turn an EPS / PS / AI / PDF into a cropped, single-page PDF with text as
+ * outlines. Colours are restored to the exact values written in the source
+ * file (Ghostscript rounds them to a 1/1024 grid otherwise).
+ * Returns { pdf, width, height, kind, sourceColors } (points).
  */
 export async function loadLogo(bytes) {
   const kind = sniff(bytes);
@@ -112,17 +124,120 @@ export async function loadLogo(bytes) {
       '-dEPSCrop', '-dFirstPage=1', '-dLastPage=1', '-o', '/out.pdf', '/' + inName],
     { [inName]: bytes }, 'out.pdf');
 
-  const bboxLog = await ghostscript(['-sDEVICE=bbox', '/in.pdf'], { 'in.pdf': normalized });
-  const m = bboxLog.match(/%%HiResBoundingBox:\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/);
-  if (!m) throw new Error('Could not measure the artwork.');
-  const [bx0, by0, bx1, by1] = m.slice(1).map(Number);
-  if (!(bx1 - bx0 > 0.01 && by1 - by0 > 0.01)) throw new Error('No artwork found in this file.');
-
-  const base = pdfMediaOrigin(normalized);
-  const box = [base[0] + bx0, base[1] + by0, base[0] + bx1, base[1] + by1];
-  const pdf = setPdfBox(normalized, box);
-  return { pdf, width: bx1 - bx0, height: by1 - by0 };
+  let pdf, width, height;
+  if (kind === 'eps') {
+    // Keep the designer's own bounding box (Ghostscript crops the page to it).
+    const doc = new mupdf.PDFDocument(normalized);
+    const mb = doc.loadPage(0).getObject().getInheritable('MediaBox');
+    const b = [0, 1, 2, 3].map((i) => mb.get(i).asNumber());
+    width = b[2] - b[0]; height = b[3] - b[1];
+    pdf = normalized;
+  } else {
+    const bboxLog = await ghostscript(['-sDEVICE=bbox', '/in.pdf'], { 'in.pdf': normalized });
+    const m = bboxLog.match(/%%HiResBoundingBox:\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/);
+    if (!m) throw new Error('Could not measure the artwork.');
+    const [bx0, by0, bx1, by1] = m.slice(1).map(Number);
+    if (!(bx1 - bx0 > 0.01 && by1 - by0 > 0.01)) throw new Error('No artwork found in this file.');
+    const base = pdfMediaOrigin(normalized);
+    pdf = setPdfBox(normalized, [base[0] + bx0, base[1] + by0, base[0] + bx1, base[1] + by1]);
+    width = bx1 - bx0; height = by1 - by0;
+  }
+  const sourceColors = kind === 'pdf' ? pdfSourceColors(bytes) : psSourceColors(postscriptText(bytes));
+  pdf = snapColors(pdf, sourceColors);
+  return { pdf, width, height, kind, sourceColors };
 }
+
+/* ------------------------------------------------------------------ */
+/* Exact source colours                                                 */
+/* ------------------------------------------------------------------ */
+
+const PS_CMYK_OPS = new Set(['k', 'K', 'setcmykcolor', 'cmyk', 'CMYK']);
+const PS_RGB_OPS = new Set(['rg', 'RG', 'setrgbcolor', 'Xa', 'XA', 'rgb', 'RGB']);
+const PS_GRAY_OPS = new Set(['g', 'G', 'setgray']);
+
+/** Every colour literally written in a PostScript / EPS program. */
+function psSourceColors(ps) {
+  const found = new Map();
+  const nums = [];
+  const re = /[-+]?(?:\d+\.?\d*|\.\d+)(?![\w.])|[A-Za-z_][\w]*/g;
+  let m;
+  while ((m = re.exec(ps))) {
+    const t = m[0];
+    const c = t.charCodeAt(0);
+    if ((c >= 48 && c <= 57) || t[0] === '.' || t[0] === '-' || t[0] === '+') {
+      nums.push(t);
+      if (nums.length > 4) nums.shift();
+      continue;
+    }
+    let space = null, n = 0;
+    if (PS_CMYK_OPS.has(t)) { space = 'CMYK'; n = 4; }
+    else if (PS_RGB_OPS.has(t)) { space = 'RGB'; n = 3; }
+    else if (PS_GRAY_OPS.has(t)) { space = 'Gray'; n = 1; }
+    if (space && nums.length >= n) {
+      const vals = nums.slice(-n).map(Number);
+      if (vals.every((v) => v >= 0 && v <= 1)) {
+        const key = space + ':' + nums.slice(-n).join(' ');
+        if (!found.has(key)) found.set(key, { space, values: vals });
+      }
+    }
+    nums.length = 0;
+  }
+  return [...found.values()];
+}
+
+/** Every device colour set in a PDF's page / form content. */
+function pdfSourceColors(bytes) {
+  const out = new Map();
+  try {
+    const doc = new mupdf.PDFDocument(bytes);
+    walkContent(doc, 0, (src) => {
+      rewriteStream(src.text, src.resources, (space, values) => {
+        const key = space + ':' + values.join(' ');
+        if (!out.has(key)) out.set(key, { space, values });
+        return null;
+      });
+      return null;
+    });
+  } catch (e) { /* fall back to Ghostscript's values */ }
+  return [...out.values()];
+}
+
+/** Put exact source values back where Ghostscript rounded them. */
+export function snapColors(pdf, sources, tolerance = 0.0025) {
+  if (!sources.length) return pdf;
+  return rewriteColors(pdf, (space, values) => {
+    let best = null, bestErr = Infinity;
+    for (const s of sources) {
+      if (s.space !== space || s.values.length !== values.length) continue;
+      let err = 0;
+      for (let i = 0; i < values.length; i++) err = Math.max(err, Math.abs(s.values[i] - values[i]));
+      if (err < bestErr) { bestErr = err; best = s; }
+    }
+    if (!best || bestErr > tolerance || bestErr === 0) return null;
+    return { space, values: best.values };
+  });
+}
+
+/**
+ * Digital (RGB) version: every colour that matches a brand colour (same space,
+ * same values) is replaced by that brand colour's official RGB value.
+ * brand: [{space:'CMYK'|'RGB'|'Gray', values:[0..1], rgb:[0..1]x3}]
+ */
+export function brandRgbPdf(pdf, brand, tolerance = 0.0005) {
+  return rewriteColors(pdf, (space, values) => {
+    for (const b of brand) {
+      if (b.space !== space || b.values.length !== values.length) continue;
+      // (n + 0.25) / 255 survives both rounding (SVG) and truncation (rasteriser) as exactly n.
+      if (b.values.every((v, i) => Math.abs(v - values[i]) <= tolerance)) {
+        return { space: 'RGB', values: b.rgb.map((v) => (Math.round(v * 255) + 0.25) / 255) };
+      }
+    }
+    return null;
+  });
+}
+
+/** Swap colours by a rule: map(space, values) -> {space, values} | null. */
+export function recolorPdf(pdf, map) { return rewriteColors(pdf, map); }
 
 function pdfMediaOrigin(pdf) {
   const doc = new mupdf.PDFDocument(pdf);
@@ -589,51 +704,79 @@ function* tokens(str) {
 }
 
 function resolveColorSpace(resources, name) {
-  if (name === 'DeviceRGB' || name === 'RGB') return { cs: mupdf.ColorSpace.DeviceRGB, n: 3 };
-  if (name === 'DeviceCMYK' || name === 'CMYK') return { cs: mupdf.ColorSpace.DeviceCMYK, n: 4 };
-  if (name === 'DeviceGray' || name === 'G') return { cs: mupdf.ColorSpace.DeviceGray, n: 1 };
+  if (name === 'DeviceRGB' || name === 'RGB') return { space: 'RGB', n: 3 };
+  if (name === 'DeviceCMYK' || name === 'CMYK') return { space: 'CMYK', n: 4 };
+  if (name === 'DeviceGray' || name === 'G') return { space: 'Gray', n: 1 };
   const obj = resources?.get('ColorSpace')?.get(name);
   if (!obj || obj.isNull()) return null;
   const o = obj.resolve();
   if (o.isName()) return resolveColorSpace(null, o.asName());
   if (o.isArray() && o.get(0).asName() === 'ICCBased') {
     const N = o.get(1).get('N').asNumber();
-    return N === 4 ? { cs: mupdf.ColorSpace.DeviceCMYK, n: 4 } : N === 3 ? { cs: mupdf.ColorSpace.DeviceRGB, n: 3 } : N === 1 ? { cs: mupdf.ColorSpace.DeviceGray, n: 1 } : null;
+    return N === 4 ? { space: 'CMYK', n: 4 } : N === 3 ? { space: 'RGB', n: 3 } : N === 1 ? { space: 'Gray', n: 1 } : null;
   }
   return null; // Separation, Pattern, Lab… left as they are
 }
 
-const WHITE = { 1: '1', 3: '1 1 1', 4: '0 0 0 0' };
+export const csFor = (space) => space === 'CMYK' ? mupdf.ColorSpace.DeviceCMYK : space === 'RGB' ? mupdf.ColorSpace.DeviceRGB : mupdf.ColorSpace.DeviceGray;
+const colorNum = (v) => {
+  const s = (Math.round(v * 1e6) / 1e6).toString();
+  return s.startsWith('0.') ? s.slice(1) : s === '-0' ? '0' : s;
+};
+const DEVICE_OP = { CMYK: ['k', 'K'], RGB: ['rg', 'RG'], Gray: ['g', 'G'] };
 
-function rewriteStream(str, resources, shouldWhiten) {
+/**
+ * Rewrite colour operators in one content stream.
+ * map(space, values) returns {space, values} to replace, or null to keep.
+ */
+function rewriteStream(str, resources, map) {
   const out = [];
   let last = 0;
   let operands = [];
   let depth = 0;
-  const cur = { fill: null, stroke: null }; // current named color space
+  const cur = { fill: null, stroke: null };
+  const restore = { fill: null, stroke: null }; // named space to re-select after a device-colour swap
   for (const t of tokens(str)) {
     if (t.type === 'open') { if (!depth) operands.push(t); depth++; continue; }
     if (t.type === 'close') { depth = Math.max(0, depth - 1); continue; }
     if (depth) continue;
     if (t.type === 'operand') { operands.push(t); continue; }
     const op = t.text;
-    let space = null;
-    let n = 0;
-    if (op === 'k' || op === 'K') { space = mupdf.ColorSpace.DeviceCMYK; n = 4; }
-    else if (op === 'rg' || op === 'RG') { space = mupdf.ColorSpace.DeviceRGB; n = 3; }
-    else if (op === 'g' || op === 'G') { space = mupdf.ColorSpace.DeviceGray; n = 1; }
+    let space = null, n = 0, side = null, named = null;
+    if (op === 'k' || op === 'K') { space = 'CMYK'; n = 4; }
+    else if (op === 'rg' || op === 'RG') { space = 'RGB'; n = 3; }
+    else if (op === 'g' || op === 'G') { space = 'Gray'; n = 1; }
     else if (op === 'cs' || op === 'CS') {
+      const sd = op === 'cs' ? 'fill' : 'stroke';
       const name = operands[operands.length - 1]?.text?.slice(1);
-      cur[op === 'cs' ? 'fill' : 'stroke'] = name ? resolveColorSpace(resources, name) : null;
+      cur[sd] = name ? { ...resolveColorSpace(resources, name), name } : null;
+      restore[sd] = null;
     } else if (op === 'sc' || op === 'scn' || op === 'SC' || op === 'SCN') {
-      const c = cur[op[0] === 's' ? 'fill' : 'stroke'];
-      if (c && !operands.some((o) => o.text?.startsWith('/'))) { space = c.cs; n = c.n; }
+      side = op[0] === 's' ? 'fill' : 'stroke';
+      const c = cur[side];
+      if (c && c.space && !operands.some((o) => o.text?.startsWith('/'))) { space = c.space; n = c.n; named = c.name; }
     }
-    if (space && operands.length === n && operands.every((o) => typeof o.num === 'number')) {
-      const values = operands.map((o) => o.num);
-      if (shouldWhiten(space, values)) {
-        out.push(str.slice(last, operands[0].start), WHITE[n], ' ');
-        last = operands[n - 1].end;
+    if (space) {
+      side = side || (op === op.toLowerCase() ? 'fill' : 'stroke');
+      const isFill = side === 'fill';
+      if (named && restore[side]) { // our earlier swap changed the current space: select it again
+        out.push(str.slice(last, operands[0]?.start ?? t.start), `/${restore[side]} ${isFill ? 'cs' : 'CS'} `);
+        last = operands[0]?.start ?? t.start;
+        restore[side] = null;
+      }
+      if (operands.length === n && operands.every((o) => typeof o.num === 'number')) {
+        const r = map(space, operands.map((o) => o.num));
+        if (r) {
+          const vals = r.values.map(colorNum).join(' ');
+          let rep;
+          if (named && r.space === space) rep = `${vals} ${op}`;
+          else {
+            rep = `${vals} ${DEVICE_OP[r.space][isFill ? 0 : 1]}`;
+            if (named) restore[side] = named;
+          }
+          out.push(str.slice(last, operands[0].start), rep);
+          last = t.end;
+        }
       }
     }
     operands = [];
@@ -642,44 +785,52 @@ function rewriteStream(str, resources, shouldWhiten) {
   return out.join('');
 }
 
-/**
- * Full-color logo for dark backgrounds: colors marked "white on dark" become
- * white, by rewriting the color operators in the PDF. Gradients stay intact.
- */
-export function reversedPdf(pdf, roles, palette) {
-  const whiteHex = new Set(palette.filter((c) => roles[c.key]?.onDark === 'white').map((c) => c.hex));
-  if (!whiteHex.size) return pdf;
-  const shouldWhiten = (cs, values) => whiteHex.has(toHex(colorToRGB(cs, values)));
-  const doc = new mupdf.PDFDocument(pdf);
+/** Visit page `index`'s content streams and nested form XObjects. fn({text, resources}) -> new text | null */
+function walkContent(doc, index, fn) {
   const seen = new Set();
-  const visit = (holder, resources) => {
-    const contents = holder.get('Contents');
-    const streams = [];
-    if (contents.isArray()) contents.forEach((c) => streams.push(c)); else streams.push(contents);
-    for (const s of streams) rewriteObj(s, resources);
-  };
-  const rewriteObj = (stream, resources) => {
+  const visit = (stream, resources) => {
     if (!stream || stream.isNull() || !stream.isStream()) return;
     const id = stream.isIndirect() ? stream.asIndirect() : null;
     if (id !== null) { if (seen.has(id)) return; seen.add(id); }
-    const src = latin1(stream.readStream().asUint8Array());
-    const res = rewriteStream(src, resources, shouldWhiten);
-    if (res !== src) stream.writeStream(Uint8Array.from(res, (ch) => ch.charCodeAt(0)));
-    // Form XObjects carry their own content.
-    const xobjs = resources?.get('XObject');
+    const text = latin1(stream.readStream().asUint8Array());
+    const res = fn({ text, resources });
+    if (res != null && res !== text) stream.writeStream(Uint8Array.from(res, (ch) => ch.charCodeAt(0)));
+    const xobjs = resources && !resources.isNull() ? resources.get('XObject') : null;
     if (xobjs && xobjs.isDictionary()) {
       xobjs.forEach((x) => {
         const xo = x.resolve();
         if (xo.isStream() && xo.get('Subtype').asName() === 'Form') {
           const xres = xo.get('Resources');
-          rewriteObj(x, xres.isNull() ? resources : xres);
+          visit(x, xres.isNull() ? resources : xres);
         }
       });
     }
   };
-  const pageObj = doc.loadPage(0).getObject();
-  visit(pageObj, pageObj.getInheritable('Resources'));
-  return doc.saveToBuffer('compress').asUint8Array().slice();
+  const pageObj = doc.loadPage(index).getObject();
+  const resources = pageObj.getInheritable('Resources');
+  const contents = pageObj.get('Contents');
+  if (contents.isArray()) contents.forEach((c) => visit(c, resources));
+  else visit(contents, resources);
+}
+
+/** Rewrite every colour operator in page 1 (and its forms) through map(). */
+function rewriteColors(pdf, map) {
+  const doc = new mupdf.PDFDocument(pdf);
+  let changed = false;
+  walkContent(doc, 0, ({ text, resources }) => {
+    const res = rewriteStream(text, resources, map);
+    if (res !== text) changed = true;
+    return res;
+  });
+  return changed ? doc.saveToBuffer('compress').asUint8Array().slice() : pdf;
+}
+
+/** Full-colour logo for dark backgrounds: colours marked "white on dark" become white. */
+export function reversedPdf(pdf, roles, palette) {
+  const whiteHex = new Set(palette.filter((c) => roles[c.key]?.onDark === 'white').map((c) => c.hex));
+  if (!whiteHex.size) return pdf;
+  return rewriteColors(pdf, (space, values) =>
+    whiteHex.has(toHex(colorToRGB(csFor(space), values))) ? { space, values: space === 'CMYK' ? [0, 0, 0, 0] : space === 'RGB' ? [1, 1, 1] : [1] } : null);
 }
 
 /* ------------------------------------------------------------------ */
