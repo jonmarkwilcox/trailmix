@@ -46,7 +46,7 @@ FoundMark_Brand_Assets/
 │   │   └── 02_Digital_RGB/
 │   │       ├── 01_SVG/
 │   │       ├── 02_PNG/01_Small … 04_Extra_Large   512 / 1024 / 2048 / 4096 px, transparent
-│   │       ├── 03_JPG/               on the brand's light or dark background
+│   │       ├── 03_JPG/               primary on white, secondary on the dark brand color
 │   │       └── 04_WEBP/              same sizes as PNG, lossless
 │   ├── 02_Logo_No-Tag/
 │   └── 03_Mark/

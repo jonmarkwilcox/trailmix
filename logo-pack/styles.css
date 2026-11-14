@@ -259,3 +259,4 @@ label.color-sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer
 .bg-role { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-top: 6px; }
 .bg-role select { font: inherit; font-size: 13px; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 3px 6px; }
 #suggest-pantone { margin-top: 10px; }
+.jpg-white { margin-top: 10px; font-size: 14px; }

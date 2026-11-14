@@ -672,7 +672,7 @@ export function buildGuide(brand) {
       ['Signs, vinyl, embroidery, engraving', 'EPS (vector)', '01_Print_CMYK / 01_EPS'],
       ['Websites and apps', 'SVG, or WEBP for speed', '02_Digital_RGB / 01_SVG, 04_WEBP'],
       ['Presentations and documents', 'PNG (transparent), 1024 or 2048 px', '02_Digital_RGB / 02_PNG'],
-      ['Places that do not support transparency', 'JPG on a brand background', '02_Digital_RGB / 03_JPG'],
+      ['Places that do not support transparency', brand.jpgOnWhite === false ? 'JPG on a brand background' : `JPG on white or ${colors.find((c) => c.bg === 'dark')?.name || 'the dark color'}`, '02_Digital_RGB / 03_JPG'],
       ['Social media profiles and covers', 'Ready-made PNGs per platform', L.extras.social.split('/').pop()],
       ['Email signatures', 'PNG, 600 px file shown at 300 px', L.extras.email.split('/').pop()],
       ['Website tab and home screen icons', 'Favicon set (open setup.html)', L.extras.icons.split('/').pop()],

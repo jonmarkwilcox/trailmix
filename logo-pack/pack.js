@@ -268,6 +268,13 @@ export function brandColorEntries(brand) {
   return brand.colors.map((c) => ({ space: c.space, values: c.values, rgb: E.hexToRgb(c.hex) }));
 }
 
+/** JPG backgrounds: plain white instead of the light brand colour (default), dark brand colour as is. */
+export function jpgBackgroundsFor(brand, a) {
+  if (brand.jpgOnWhite === false) return backgroundsFor(brand, a);
+  const swapped = { ...brand, colors: brand.colors.map((c) => (c.bg === 'light' ? { ...c, hex: '#FFFFFF', name: 'White' } : c)) };
+  return backgroundsFor(swapped, a);
+}
+
 /** Backgrounds a logo may sit on: the brand's background colours that keep enough contrast. */
 export function backgroundsFor(brand, a) {
   const byKey = new Map(brand.colors.map((c) => [c.key, c]));
@@ -470,7 +477,7 @@ export function packageOutline(brand) {
     { depth: d, name: '02_Digital_RGB', desc: 'For screens. Official HEX / RGB colors.' },
     { depth: d + 1, name: '01_SVG', desc: 'Scalable artwork for websites and apps.' },
     { depth: d + 1, name: '02_PNG', desc: 'Transparent background. 512 to 4096 px.' },
-    { depth: d + 1, name: '03_JPG', desc: 'Solid brand backgrounds.' },
+    { depth: d + 1, name: '03_JPG', desc: brand.jpgOnWhite === false ? 'Solid brand backgrounds.' : 'Solid backgrounds: white, or the dark brand color.' },
     { depth: d + 1, name: '04_WEBP', desc: 'Lightweight transparent images for websites.' },
   ];
   if (L.multi) {
@@ -533,7 +540,7 @@ export async function buildPackage(brand, out, opts = {}) {
       if (opts.webp) out(`${digital}/04_WEBP/${s.folder}/${a.base}-rgb-${s.px}px.webp`, await opts.webp(png));
       await tick();
     }
-    for (const bg of backgroundsFor(brand, a)) {
+    for (const bg of jpgBackgroundsFor(brand, a)) {
       out(`${digital}/03_JPG/${a.base}-rgb-on-${bg.slug}.jpg`,
         E.render(rgb, { ...paddedBox(a.logo, 2400), background: bg.rgb, format: 'jpg', quality: 95 }));
     }

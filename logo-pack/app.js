@@ -236,6 +236,7 @@ $('#families').addEventListener('change', (e) => {
 });
 
 $('#brand').addEventListener('input', (e) => { brand.name = e.target.value; renderAssetNames(); });
+$('#jpg-white').addEventListener('change', (e) => { brand.jpgOnWhite = e.target.checked; updateCount(); });
 
 const thumbCache = new Map();
 function thumbFor(a) {
@@ -319,7 +320,7 @@ function setProgress(text, frac) {
 }
 function estimate() {
   let n = 0;
-  for (const a of brand.assets) n += 3 + P.PNG_SIZES.length * 2 + P.backgroundsFor(brand, a).length;
+  for (const a of brand.assets) n += 3 + P.PNG_SIZES.length * 2 + P.jpgBackgroundsFor(brand, a).length;
   return n + 9 + P.SOCIAL.length * 2 + 4 + 4 + 1;
 }
 function updateCount() {
