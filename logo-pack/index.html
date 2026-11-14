@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Logo Pack</title>
+  <meta name="description" content="Drop in an EPS logo and get every file a brand needs: color, black, white and reversed versions in EPS, PDF, SVG, PNG and JPG, plus favicons, social images and brand colors.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234338ca'/%3E%3Crect x='8' y='8' width='7' height='7' rx='1.5' fill='white'/%3E%3Crect x='17' y='8' width='7' height='7' rx='3.5' fill='white'/%3E%3Crect x='8' y='17' width='7' height='7' rx='3.5' fill='white' opacity='.6'/%3E%3Crect x='17' y='17' width='7' height='7' rx='1.5' fill='white' opacity='.6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/paper/paper-core.min.js"></script>
+  <script src="vendor/jszip/jszip.min.js"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap top-inner">
+      <svg class="brandmark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--accent)"/><rect x="8" y="8" width="7" height="7" rx="1.5" fill="var(--accent-ink)"/><rect x="17" y="8" width="7" height="7" rx="3.5" fill="var(--accent-ink)"/><rect x="8" y="17" width="7" height="7" rx="3.5" fill="var(--accent-ink)" opacity=".6"/><rect x="17" y="17" width="7" height="7" rx="1.5" fill="var(--accent-ink)" opacity=".6"/></svg>
+      <div>
+        <h1>Logo Pack</h1>
+        <p class="tag">Drop in your EPS. Get every logo file your client will ask for.</p>
+      </div>
+      <span id="engine-status" class="pill" role="status">Loading converter…</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section id="intro" class="drop-hero">
+      <label id="dropzone" class="dropzone" tabindex="0">
+        <input id="file-input" type="file" accept=".eps,.ai,.pdf,.ps,application/postscript,application/pdf" multiple hidden>
+        <svg class="drop-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M24 31V11m0 0-8 8m8-8 8 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 29v6a4 4 0 0 0 4 4h22a4 4 0 0 0 4-4v-6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        <strong>Drop your logo files here</strong>
+        <span>EPS, AI or PDF · add several for horizontal, stacked and icon layouts</span>
+        <span class="btn btn-secondary">Choose files</span>
+      </label>
+      <ol class="how">
+        <li><b>1</b><span><strong>Upload</strong> the vector master: EPS, AI or PDF.</span></li>
+        <li><b>2</b><span><strong>Check</strong> the color versions and pick the sizes you need.</span></li>
+        <li><b>3</b><span><strong>Download</strong> one organized .zip: print, digital, icons, social and brand colors.</span></li>
+      </ol>
+      <p class="privacy">Your files never leave your computer. Everything is converted right here in the browser.</p>
+    </section>
+
+    <section id="workspace" class="workspace" hidden>
+      <aside class="settings">
+        <div class="card">
+          <h2>Logos</h2>
+          <ul id="logo-list" class="logo-list"></ul>
+          <button id="add-more" class="btn btn-ghost" type="button">+ Add another layout</button>
+        </div>
+
+        <div class="card">
+          <h2><label for="brand">Brand name</label></h2>
+          <input id="brand" type="text" placeholder="e.g. Acme" autocomplete="off">
+          <p class="hint">Used in folder and file names.</p>
+        </div>
+
+        <div class="card">
+          <h2>Versions</h2>
+          <div id="variant-list" class="checks"></div>
+          <div id="brand-color-row" class="inline-row" hidden>
+            <label for="brand-color">One-color ink</label>
+            <input id="brand-color" type="color" value="#4338ca">
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Colors found</h2>
+          <p class="hint">Choose how each color behaves in the black, white and one-color versions and on dark backgrounds.</p>
+          <div id="palette" class="palette"></div>
+        </div>
+
+        <div class="card">
+          <h2>PNG &amp; JPG widths</h2>
+          <div id="widths" class="chips"></div>
+          <div class="inline-row">
+            <label for="custom-width">Custom</label>
+            <input id="custom-width" type="number" min="16" max="10000" step="1" placeholder="px">
+            <button id="add-width" class="btn btn-ghost btn-sm" type="button">Add</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Layout</h2>
+          <div class="field">
+            <span class="field-label">Padding around the logo</span>
+            <div id="padding" class="segmented" role="radiogroup" aria-label="Padding"></div>
+          </div>
+          <div class="inline-row">
+            <label for="dark-bg">Dark background</label>
+            <input id="dark-bg" type="color" value="#111827">
+          </div>
+          <p class="hint">Used behind white and reversed logos in JPGs and social images.</p>
+        </div>
+
+        <div class="card">
+          <h2>Also include</h2>
+          <div id="extras" class="checks"></div>
+        </div>
+      </aside>
+
+      <div class="previews">
+        <div class="preview-head">
+          <h2>Preview</h2>
+          <div id="bg-mode" class="segmented" role="radiogroup" aria-label="Preview background"></div>
+        </div>
+        <div id="notes" class="notes" hidden></div>
+        <div id="preview-grid"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="bar" class="bar" hidden>
+    <div class="wrap bar-inner">
+      <div class="bar-text">
+        <strong id="file-count">0 files</strong>
+        <span id="progress-text">Ready when you are.</span>
+        <div class="progress" aria-hidden="true"><div id="progress-fill"></div></div>
+      </div>
+      <button id="download" class="btn btn-primary" type="button">Download logo pack</button>
+    </div>
+  </div>
+
+  <footer class="wrap foot">
+    Runs fully in your browser using Ghostscript and MuPDF (AGPL) compiled to WebAssembly.
+  </footer>
+</body>
+</html>
