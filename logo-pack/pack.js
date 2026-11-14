@@ -76,7 +76,7 @@ export function collectColors(assets, previous = []) {
           key, space, values,
           cmyk: space === 'CMYK' ? values : space === 'Gray' ? [0, 0, 0, +(1 - values[0]).toFixed(6)] : null,
           sourceRgb: space === 'RGB' ? values : null,
-          hex: old?.hex || c.hex, name: old?.name || '', pantone: old?.pantone || '', named: !!old?.named,
+          hex: old?.hex || c.hex, name: old?.name || '', pantone: old?.pantone || '', note: old?.note || '', named: !!old?.named,
           area: 0,
         };
         map.set(key, e);
@@ -87,8 +87,12 @@ export function collectColors(assets, previous = []) {
     a.dominantKey = a.colorKeys[0];
   }
   const colors = [...map.values()];
-  // Neutrals first (dark to light), then accents by hue.
+  // Keep the user's order for colours seen before; new ones: neutrals first (dark to light), then accents by hue.
+  const prevIndex = new Map(previous.map((c, i) => [c.key, i]));
   colors.sort((x, y) => {
+    const px = prevIndex.has(x.key), py = prevIndex.has(y.key);
+    if (px && py) return prevIndex.get(x.key) - prevIndex.get(y.key);
+    if (px !== py) return px ? -1 : 1;
     const rx = E.hexToRgb(x.hex), ry = E.hexToRgb(y.hex);
     const nx = isNeutral(rx), ny = isNeutral(ry);
     if (nx !== ny) return nx ? -1 : 1;
@@ -350,7 +354,7 @@ function colorsJson(brand) {
   return JSON.stringify({
     brand: brand.name,
     colors: brand.colors.map((c) => ({
-      name: c.name, hex: c.hex.toUpperCase(), rgb: E.hexToRgb(c.hex).map((v) => Math.round(v * 255)),
+      name: c.name, note: c.note || null, hex: c.hex.toUpperCase(), rgb: E.hexToRgb(c.hex).map((v) => Math.round(v * 255)),
       cmyk: c.cmyk ? c.cmyk.map((v) => +(v * 100).toFixed(4)) : null, pantone: c.pantone || null,
     })),
   }, null, 2) + '\n';
@@ -359,7 +363,7 @@ export const cmykText = (cmyk) => cmyk ? cmyk.map((v) => +(v * 100).toFixed(2)).
 function colorsTxt(brand) {
   const out = [`${brand.name} brand colors`, '', 'Use HEX and RGB on screens. Use CMYK (or Pantone) in print.', ''];
   for (const c of brand.colors) {
-    out.push(c.name);
+    out.push(c.name + (c.note ? `  (${c.note})` : ''));
     out.push(`  HEX      ${c.hex.toUpperCase()}`);
     out.push(`  RGB      ${E.hexToRgb(c.hex).map((v) => Math.round(v * 255)).join(', ')}`);
     if (c.cmyk) out.push(`  CMYK     ${cmykText(c.cmyk)}`);

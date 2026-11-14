@@ -128,7 +128,7 @@ function lightBg() { const c = neutralsBy(-1)[0]; return c && E.luminance(E.hexT
 const colorSub = (c) => `${c.cmyk ? `CMYK ${P.cmykText(c.cmyk)} <span class="exact">from file</span>` : `${c.space} ${c.values.map((v) => +(v * 100).toFixed(2)).join(', ')}`} · RGB ${E.hexToRgb(c.hex).map((v) => Math.round(v * 255)).join(' ')}`;
 
 function renderColors() {
-  $('#colors').innerHTML = brand.colors.map((c) => `
+  $('#colors').innerHTML = brand.colors.map((c, i) => `
     <div class="color-row" data-key="${esc(c.key)}">
       <label class="color-sw" style="background:${c.hex}" title="Pick the official color">
         <input type="color" value="${c.hex.toLowerCase()}" data-act="picker" aria-label="${esc(c.name)} color">
@@ -139,8 +139,12 @@ function renderColors() {
           <input type="text" value="${c.hex.toUpperCase()}" data-act="hex" aria-label="${esc(c.name)} HEX" class="in-hex" maxlength="7" spellcheck="false">
         </div>
         <div class="sub">${colorSub(c)}</div>
-        <input type="text" value="${esc(c.pantone)}" data-act="pantone" placeholder="Pantone (optional)" aria-label="${esc(c.name)} Pantone" class="in-pms">
+        <div class="color-fields">
+          <input type="text" value="${esc(c.note)}" data-act="note" placeholder="Usage note (optional)" aria-label="${esc(c.name)} usage note" class="in-name in-note">
+          <input type="text" value="${esc(c.pantone)}" data-act="pantone" placeholder="Pantone" aria-label="${esc(c.name)} Pantone" class="in-hex in-pms">
+        </div>
       </div>
+      ${i > 0 ? `<button class="icon-btn move-up" type="button" data-act="up" title="Move up" aria-label="Move ${esc(c.name)} up">\u2191</button>` : '<span></span>'}
     </div>`).join('') || '<p class="hint">Colors appear after your files are read.</p>';
 }
 
@@ -151,6 +155,7 @@ $('#colors').addEventListener('input', (e) => {
   const act = e.target.dataset.act;
   if (act === 'name') { c.name = e.target.value; c.named = true; clearTimeout(colorTimer); colorTimer = setTimeout(renderFamilies, 300); }
   if (act === 'pantone') c.pantone = e.target.value;
+  if (act === 'note') c.note = e.target.value;
   if (act === 'hex' && validHex(e.target.value)) { c.hex = normHex(e.target.value); row.querySelector('[data-act=picker]').value = c.hex.toLowerCase(); }
   if (act === 'picker') { c.hex = e.target.value.toUpperCase(); row.querySelector('[data-act=hex]').value = c.hex; }
   if (act === 'hex' || act === 'picker') {
@@ -159,6 +164,13 @@ $('#colors').addEventListener('input', (e) => {
     clearTimeout(colorTimer);
     colorTimer = setTimeout(() => { renderFamilies(); renderAssets(); }, 300);
   }
+});
+
+$('#colors').addEventListener('click', (e) => {
+  if (e.target.dataset.act !== 'up') return;
+  const i = brand.colors.findIndex((x) => x.key === e.target.closest('.color-row').dataset.key);
+  if (i > 0) [brand.colors[i - 1], brand.colors[i]] = [brand.colors[i], brand.colors[i - 1]];
+  renderColors();
 });
 
 function renderFamilies() {

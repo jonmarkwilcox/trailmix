@@ -249,3 +249,7 @@ label.color-sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer
 .color-fields input.in-hex { width: 92px; flex: 0 0 92px; }
 .asset .stage { aspect-ratio: auto; height: 150px; padding: 18px 24px; }
 .asset .stage img { max-height: 114px; max-width: 100%; width: auto; height: auto; }
+.color-row { grid-template-columns: 44px 1fr 28px; }
+.color-row .in-note, .color-row .in-pms { margin-top: 6px; font-weight: 400; }
+.move-up { font-size: 16px; padding: 4px; }
+.move-up:hover { color: var(--accent); }

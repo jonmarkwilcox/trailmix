@@ -467,10 +467,12 @@ export function buildGuide(brand) {
       const sh = ch * 0.48;
       pg.rect(x, y, cw, sh, { fill: c.hex, stroke: E.luminance(rgbOf(c.hex)) > 0.9 ? RULE : undefined, r: 8 });
       pg.text(c.name, x, y + sh + 12, { size: 21, font: 'b' });
+      let ty = y + sh + 44;
+      if (c.note) { pg.text(c.note, x, ty, { size: 16 }); ty += 26; }
       const lines = [`HEX  ${c.hex.toUpperCase()}`, `RGB  ${rgbOf(c.hex).map((v) => Math.round(v * 255)).join(', ')}`];
       if (c.cmyk) lines.push(`CMYK  ${P.cmykText(c.cmyk)}`);
       if (c.pantone) lines.push(`PANTONE  ${c.pantone}`);
-      lines.forEach((t, j) => pg.text(t, x, y + sh + 46 + j * 24, { size: 16, color: MUTED }));
+      lines.forEach((t, j) => pg.text(t, x, ty + j * 24, { size: 16, color: MUTED }));
     });
   }, 'Brand colors');
 
